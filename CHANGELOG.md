@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **API key authentication** (`edgeshield-api`): Bearer token auth with SHA-256 hashed keys (never store plaintext in config) and constant-time comparison via `subtle`. Two permission levels: read-only (GET) and admin (POST/DELETE). Single-key mode when `admin_key_hash` is absent. `/health` is always exempt. 15 new tests in `auth.rs`.
+- **Per-IP rate limiting** (`edgeshield-api`): tracks failed auth attempts per IP address in a `DashMap`. After `max_failures` (default 10) within `window_seconds` (default 60), the IP is blocked for `block_seconds` (default 300). Configurable via `[api.auth]`. Set `max_failures = 0` to disable.
+- **TLS for API server** (`edgeshield-api`): HTTPS support via `axum-server` + `rustls`. Configure with `[api.tls]` (`cert_path`, `key_path` in PEM format). Pure Rust TLS — no OpenSSL dependency.
+- **Configurable listen address** (`edgeshield-config`): new `api_bind_address` field (default `0.0.0.0`). Set to `127.0.0.1` to restrict to local processes only.
+- **Audit logging** (`edgeshield-api`): JSON-lines audit log to a separate file. Logs method, path, status, key hash prefix (4 hex chars — identifies which key without revealing it), and duration. `/health` is exempt. Configure with `[api.audit] log_path`.
+- **Startup security warnings** (`edgeshield-api`): warns when auth is disabled and binding to non-loopback, or when auth is enabled without TLS.
+- **`[api]` config section** (`edgeshield-config`): `[api.auth]` (read_key_hash, admin_key_hash, max_failures, window_seconds, block_seconds), `[api.tls]` (cert_path, key_path), `[api.audit]` (log_path). Validation: hash format (64 hex chars), non-empty paths. 9 new tests.
+
+### Changed
+
+- **API `serve()` signature**: now takes `&Config` instead of individual args (port, store, alert_store, history_store). The config provides bind address, port, auth, TLS, and audit settings.
+- **API `AppState`**: now holds `AuthState` and `Option<Arc<AuditLogger>>` alongside the stores.
+- **Middleware via `from_fn_with_state`**: auth and audit middleware receive their state via `from_fn_with_state` (not extracted from the router's `AppState`) to avoid Axum extractor ordering constraints.
+
+### Device history snapshots (Phase 3 completion)
+
 - **Device history snapshots** (`edgeshield-common`, `edgeshield-storage`): new `DeviceHistoryStore` trait and `DeviceHistorySnapshot` type in `edgeshield-common`. New `SqliteHistoryStore` in `edgeshield-storage` persists daily snapshots to a `device_history` table with `UNIQUE(mac, snapshot_date)` upsert. 8 new tests.
 - **`/devices/:mac/history` API endpoint** (`edgeshield-api`): returns daily snapshots for a device, filtered by date range (`from`, `to`) and `limit`. Returns 501 if history is not enabled.
 - **`[storage]` config section** (`edgeshield-config`): `history_snapshot_hours` (default 24) and `history_retention_days` (default 90). Set `history_snapshot_hours = 0` to disable. 3 new tests.

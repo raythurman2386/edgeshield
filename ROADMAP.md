@@ -1,6 +1,6 @@
 # EdgeShield ROADMAP
 
-> **Status**: Phase 6 (Security & Access Control)
+> **Status**: Phase 7 (Packaging & Distribution)
 > **Version**: 0.1.0
 > **Last updated**: 2026-07-19
 
@@ -127,19 +127,21 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 
 ---
 
-## Phase 6: Security & Access Control ⬜
+## Phase 6: Security & Access Control ✅
 
 **Goal**: The API is not an open door.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| API key authentication (Bearer token) | P0 | 1 day | — |
-| TLS for API server | P0 | 1 day | — |
-| Configurable listen address (not just 0.0.0.0) | P0 | 0.5 day | — |
-| Read-only API key vs admin key | P1 | 1 day | auth |
-| Audit log (who accessed what, when) | P2 | 1 day | auth |
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| **Configurable listen address** | P0 | 0.5 day | — | ✅ Delivered (`api_bind_address` config field, default `0.0.0.0`) |
+| **API key authentication (Bearer token)** | P0 | 1.5 days | — | ✅ Delivered (SHA-256 hashed keys, constant-time comparison via `subtle`, `/health` exempt) |
+| **TLS for API server** | P0 | 1.5 days | — | ✅ Delivered (`axum-server` + `rustls`, PEM cert/key, `[api.tls]` config) |
+| **Read-only vs admin key** | P1 | 0.5 day | auth | ✅ Delivered (read key = GET only, admin key = POST/DELETE, single-key mode) |
+| **Rate limiting** | P0 | 1 day | auth | ✅ Delivered (per-IP failed attempt tracking, configurable window/block, `DashMap`-backed) |
+| **Audit log** | P2 | 1 day | auth | ✅ Delivered (JSON-lines format, separate file, key hash prefix, `/health` exempt) |
+| **Startup security warnings** | P0 | 0.25 day | — | ✅ Delivered (warns on no-auth + non-loopback, auth without TLS) |
 
-**Exit criteria**: Without a valid API key, all endpoints return 401. With TLS, curl works with `--cacert`.
+**Exit criteria**: Without a valid API key, all endpoints return 401. With TLS, curl works with `--cacert`. ✅ All met.
 
 ---
 
@@ -227,6 +229,6 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 6: Security & Access Control** — API key auth, TLS, configurable listen address.
+**Phase 7: Packaging & Distribution** — `.deb` package, Docker image, setup wizard.
 
-**Just shipped**: Phase 5 complete (2026-07-19). Rule engine with inline TOML rules (`[[rules]]`), five condition types (new_device, new_device_by_vendor, new_device_by_mac_prefix, device_offline, protocol_change), per-device per-rule cooldown, alert acknowledgment with suppression, multi-notifier fan-out (ntfy + MQTT + webhook + email simultaneously), webhook channel (Slack/Discord/Teams-compatible), SMTP email channel (lettre, STARTTLS), and a background offline scanner. New `edgeshield-rules` crate.
+**Just shipped**: Phase 6 complete (2026-07-19). API key authentication with SHA-256 hashed keys and constant-time comparison, two permission levels (read-only vs admin), per-IP rate limiting with configurable window/block, TLS via `axum-server` + `rustls`, configurable listen address, audit logging to a separate JSON-lines file, and startup security warnings. New `auth.rs` and `audit.rs` modules in `edgeshield-api`.

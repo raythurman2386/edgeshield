@@ -52,6 +52,14 @@ bytes = "1"
 dashmap = "6"
 async-trait = "0.1"
 
+# Cryptography (API auth)
+sha2 = "0.10"
+subtle = "2"
+
+# TLS (API server)
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls-pemfile = "2"
+
 # HTTP client (for ntfy notifications)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 

@@ -15,7 +15,13 @@ anyhow.workspace = true
 tokio.workspace = true
 mac_address.workspace = true
 hex.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+axum-server.workspace = true
 edgeshield-common = { path = "../common" }
+edgeshield-config = { path = "../config" }
 edgeshield-storage = { path = "../storage" }
 
 [dev-dependencies]

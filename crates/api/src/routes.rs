@@ -422,6 +422,8 @@ mod tests {
             store,
             alert_store,
             history_store: None,
+            auth: crate::auth::AuthState::new(None),
+            audit_logger: None,
         };
 
         Router::new()

@@ -33,4 +33,16 @@ pub enum ConfigError {
 
     #[error("invalid severity: {0}")]
     InvalidSeverity(String),
+
+    #[error("invalid API auth config: read_key_hash cannot be empty")]
+    EmptyAuthKeyHash,
+
+    #[error("invalid API auth config: key hash must be 64 hex characters (SHA-256)")]
+    InvalidKeyHashFormat,
+
+    #[error("invalid TLS config: cert_path cannot be empty")]
+    EmptyTlsCertPath,
+
+    #[error("invalid TLS config: key_path cannot be empty")]
+    EmptyTlsKeyPath,
 }

@@ -224,14 +224,9 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     let api_store = store.clone();
     let api_alert_store = alert_store.clone();
     let api_history_store = history_store.clone();
+    let api_config = config.clone();
     let api_handle = tokio::spawn(async move {
-        if let Err(e) = api::serve(
-            config.api_port,
-            api_store,
-            api_alert_store,
-            api_history_store,
-        )
-        .await
+        if let Err(e) = api::serve(&api_config, api_store, api_alert_store, api_history_store).await
         {
             error!(error = %e, "API server error");
         }

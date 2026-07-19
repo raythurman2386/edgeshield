@@ -18,6 +18,18 @@ pub struct Config {
     #[serde(default = "default_api_port")]
     pub api_port: u16,
 
+    /// Address to bind the REST API server to. Default `0.0.0.0`
+    /// (all interfaces). Set to `127.0.0.1` to restrict access to
+    /// local processes only (recommended when using a reverse proxy
+    /// or when no API authentication is configured).
+    #[serde(default = "default_api_bind_address")]
+    pub api_bind_address: String,
+
+    /// API authentication, TLS, and audit settings. When absent, the
+    /// API is unauthenticated and uses plain HTTP (backward compat).
+    #[serde(default)]
+    pub api: ApiConfig,
+
     /// Log level (trace, debug, info, warn, error).
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -371,6 +383,94 @@ fn default_history_retention_days() -> u64 {
     90
 }
 
+/// API server configuration: authentication, TLS, and audit logging.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ApiConfig {
+    /// API key authentication. When present, all endpoints except
+    /// `/health` require a valid Bearer token. When absent, the API
+    /// is unauthenticated (backward compat).
+    #[serde(default)]
+    pub auth: Option<ApiAuthConfig>,
+
+    /// TLS settings. When present, the API server uses HTTPS. When
+    /// absent, plain HTTP is used.
+    #[serde(default)]
+    pub tls: Option<ApiTlsConfig>,
+
+    /// Audit logging settings. When present, all API requests (except
+    /// `/health`) are logged to a file in JSON-lines format.
+    #[serde(default)]
+    pub audit: Option<ApiAuditConfig>,
+}
+
+/// API key authentication configuration.
+///
+/// Keys are stored as SHA-256 hashes — never store the plaintext key
+/// in the config. Generate a key with `openssl rand -hex 32`, then
+/// hash it with `echo -n "your-key" | sha256sum` and put the hash
+/// here.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiAuthConfig {
+    /// SHA-256 hash (hex) of the read-only API key. Required for all
+    /// GET endpoints except `/health`.
+    pub read_key_hash: String,
+
+    /// SHA-256 hash (hex) of the admin API key. Required for POST and
+    /// DELETE endpoints. If absent, `read_key_hash` is used for all
+    /// endpoints (single-key mode).
+    #[serde(default)]
+    pub admin_key_hash: Option<String>,
+
+    /// Rate limiting: maximum failed auth attempts per IP address
+    /// within the window before the IP is temporarily blocked.
+    /// Default 10. Set to 0 to disable rate limiting.
+    #[serde(default = "default_auth_max_failures")]
+    pub max_failures: u32,
+
+    /// Rate limiting: the window in seconds for counting failed
+    /// attempts. Default 60.
+    #[serde(default = "default_auth_window_seconds")]
+    pub window_seconds: u64,
+
+    /// Rate limiting: how long (in seconds) to block an IP after it
+    /// exceeds `max_failures`. Default 300 (5 minutes).
+    #[serde(default = "default_auth_block_seconds")]
+    pub block_seconds: u64,
+}
+
+/// TLS configuration for the API server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiTlsConfig {
+    /// Path to the TLS certificate (PEM format).
+    pub cert_path: String,
+    /// Path to the TLS private key (PEM format).
+    pub key_path: String,
+}
+
+/// Audit logging configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiAuditConfig {
+    /// Path to the audit log file. Requests are appended in JSON-lines
+    /// format (one JSON object per line).
+    pub log_path: String,
+}
+
+fn default_auth_max_failures() -> u32 {
+    10
+}
+
+fn default_auth_window_seconds() -> u64 {
+    60
+}
+
+fn default_auth_block_seconds() -> u64 {
+    300
+}
+
+fn default_api_bind_address() -> String {
+    "0.0.0.0".to_string()
+}
+
 fn default_rule_enabled() -> bool {
     true
 }
@@ -404,6 +504,8 @@ impl Default for Config {
         Self {
             interface: String::new(),
             api_port: default_api_port(),
+            api_bind_address: default_api_bind_address(),
+            api: ApiConfig::default(),
             log_level: default_log_level(),
             capture_buffer: default_capture_buffer(),
             database_path: default_database_path(),
@@ -467,6 +569,37 @@ impl FromStr for Config {
             // Validate severity string (parse to check, discard result).
             let _ =
                 Severity::from_str(&rule.severity).map_err(crate::ConfigError::InvalidSeverity)?;
+        }
+
+        // Validate API auth config if present.
+        if let Some(ref auth) = config.api.auth {
+            if auth.read_key_hash.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyAuthKeyHash);
+            }
+            // Validate that the hash is a valid hex string (64 chars
+            // for SHA-256). We don't verify it's a *real* SHA-256
+            // hash — just that it's the right format.
+            if !auth.read_key_hash.chars().all(|c| c.is_ascii_hexdigit())
+                || auth.read_key_hash.len() != 64
+            {
+                return Err(crate::ConfigError::InvalidKeyHashFormat);
+            }
+            if let Some(ref admin_hash) = auth.admin_key_hash
+                && (!admin_hash.chars().all(|c| c.is_ascii_hexdigit()) || admin_hash.len() != 64)
+            {
+                return Err(crate::ConfigError::InvalidKeyHashFormat);
+            }
+        }
+
+        // Validate TLS config if present: cert and key paths must be
+        // non-empty.
+        if let Some(ref tls) = config.api.tls {
+            if tls.cert_path.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyTlsCertPath);
+            }
+            if tls.key_path.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyTlsKeyPath);
+            }
         }
 
         Ok(config)
@@ -847,5 +980,118 @@ mod tests {
         "#;
         let config: Config = toml.parse().unwrap();
         assert_eq!(config.storage.history_retention_days, 0);
+    }
+
+    #[test]
+    fn test_api_bind_address_default() {
+        let toml = r#"
+            interface = "eth0"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.api_bind_address, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_api_bind_address_custom() {
+        let toml = r#"
+            interface = "eth0"
+            api_bind_address = "127.0.0.1"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.api_bind_address, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_api_auth_default_none() {
+        let toml = r#"
+            interface = "eth0"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert!(config.api.auth.is_none());
+        assert!(config.api.tls.is_none());
+        assert!(config.api.audit.is_none());
+    }
+
+    #[test]
+    fn test_api_auth_config() {
+        let toml = r#"
+            interface = "eth0"
+            [api.auth]
+            read_key_hash = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+            admin_key_hash = "f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5"
+            max_failures = 5
+            window_seconds = 30
+            block_seconds = 600
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let auth = config.api.auth.unwrap();
+        assert_eq!(auth.read_key_hash.len(), 64);
+        assert!(auth.admin_key_hash.is_some());
+        assert_eq!(auth.max_failures, 5);
+        assert_eq!(auth.window_seconds, 30);
+        assert_eq!(auth.block_seconds, 600);
+    }
+
+    #[test]
+    fn test_api_auth_empty_key_hash_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [api.auth]
+            read_key_hash = ""
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::EmptyAuthKeyHash)));
+    }
+
+    #[test]
+    fn test_api_auth_invalid_hash_format_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [api.auth]
+            read_key_hash = "not-a-valid-hash"
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(
+            result,
+            Err(crate::ConfigError::InvalidKeyHashFormat)
+        ));
+    }
+
+    #[test]
+    fn test_api_tls_config() {
+        let toml = r#"
+            interface = "eth0"
+            [api.tls]
+            cert_path = "/etc/edgeshield/cert.pem"
+            key_path = "/etc/edgeshield/key.pem"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let tls = config.api.tls.unwrap();
+        assert_eq!(tls.cert_path, "/etc/edgeshield/cert.pem");
+        assert_eq!(tls.key_path, "/etc/edgeshield/key.pem");
+    }
+
+    #[test]
+    fn test_api_tls_empty_cert_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [api.tls]
+            cert_path = ""
+            key_path = "/etc/edgeshield/key.pem"
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::EmptyTlsCertPath)));
+    }
+
+    #[test]
+    fn test_api_audit_config() {
+        let toml = r#"
+            interface = "eth0"
+            [api.audit]
+            log_path = "/var/log/edgeshield/audit.log"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let audit = config.api.audit.unwrap();
+        assert_eq!(audit.log_path, "/var/log/edgeshield/audit.log");
     }
 }
