@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Terminal UI** (`edgeshield-tui`): new `edgeshield tui` subcommand — a ratatui-based read-only observability dashboard over the REST API. Views: devices table, device detail with history sparkline, alerts feed with acknowledge action, metrics, health. Feature-gated behind the `tui` feature (default-on); can be excluded for constrained targets. 34 new tests (13 client tests, 21 render tests).
+- **Hot-path performance optimizations** (`edgeshield-common`, `edgeshield-discovery`, `edgeshield-storage`): three changes that together enable 10k+ pps with persistence on Raspberry Pi 4: (1) single timestamp per packet (halves clock_gettime syscalls), (2) event emission only on state changes (cuts event channel volume ~90%), (3) write-back cache for SqliteStore (DashMap front-end, 5s background flush, no per-packet SQL writes).
 - **API key authentication** (`edgeshield-api`): Bearer token auth with SHA-256 hashed keys (never store plaintext in config) and constant-time comparison via `subtle`. Two permission levels: read-only (GET) and admin (POST/DELETE). Single-key mode when `admin_key_hash` is absent. `/health` is always exempt. 15 new tests in `auth.rs`.
 - **Per-IP rate limiting** (`edgeshield-api`): tracks failed auth attempts per IP address in a `DashMap`. After `max_failures` (default 10) within `window_seconds` (default 60), the IP is blocked for `block_seconds` (default 300). Configurable via `[api.auth]`. Set `max_failures = 0` to disable.
 - **TLS for API server** (`edgeshield-api`): HTTPS support via `axum-server` + `rustls`. Configure with `[api.tls]` (`cert_path`, `key_path` in PEM format). Pure Rust TLS — no OpenSSL dependency.

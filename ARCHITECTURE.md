@@ -97,15 +97,15 @@ Pure protocol classification and payload parsing. The `classify()` function maps
 ### `edgeshield-storage`
 
 Defines the `DeviceStore` trait and provides three SQLite-backed stores:
-- `SqliteStore` — device inventory (UPSERT on every packet)
+- `SqliteStore` — device inventory with a write-back cache (DashMap front-end, background flush every 5s). The hot path hits the in-memory cache, not SQLite. On open, existing devices are loaded from SQLite into the cache. A final flush runs on shutdown.
 - `SqliteAlertStore` — alert history (append-mostly, queryable via API)
 - `SqliteHistoryStore` — daily device snapshots (UNIQUE(mac, snapshot_date) upsert)
 
-All share the same SQLite database file. Schema migrations are idempotent (`ALTER TABLE ADD COLUMN` with duplicate-column error suppression).
+All share the same SQLite database file. Schema migrations are idempotent (`ALTER TABLE ADD COLUMN` with duplicate-column error suppression). Trade-off: on an unclean shutdown, the last flush interval's counter updates may be lost (acceptable for a monitoring tool).
 
 ### `edgeshield-discovery`
 
-The `DiscoveryEngine` is the stateful core. It holds an `Arc<dyn DeviceStore>` and an event sender. The `process_packet()` method runs the full decode-classify-fingerprint-update pipeline for a single packet. Also emits `DeviceOffline` events from the background scanner.
+The `DiscoveryEngine` is the stateful core. It holds an `Arc<dyn DeviceStore>` and an event sender. The `process_packet()` method runs the full decode-classify-fingerprint-update pipeline for a single packet. Computes one timestamp per packet (shared across source and destination device updates). Emits `DeviceUpdated` events only on state changes (new IP, new protocol, hostname, vendor class) — not on every counter increment, cutting event channel volume by ~90%. Also emits `DeviceOffline` events from the background scanner.
 
 ### `edgeshield-rules`
 
@@ -139,15 +139,20 @@ The orchestrator. Wires together all subsystems in the `run()` function:
 10. Start the notifier fanout
 11. Start the offline scanner
 12. Start the history snapshot task
-13. Start the API server (with auth, TLS, audit)
-14. Start packet capture
-15. Spawn pipeline task
-16. Wait for `SIGINT`/`SIGTERM`
-17. Graceful shutdown
+13. Start the SQLite write-back flush task (every 5s + on shutdown)
+14. Start the API server (with auth, TLS, audit)
+15. Start packet capture
+16. Spawn pipeline task
+17. Wait for `SIGINT`/`SIGTERM`
+18. Graceful shutdown (final SQLite flush)
+
+### `edgeshield-tui`
+
+Optional terminal UI built with `ratatui` + `crossterm`. Feature-gated behind the `tui` feature in `edgeshield-cli` (default-on). A thin read-only client that polls the daemon's REST API — holds no authoritative state. Views: devices table, device detail with history sparkline, alerts feed with acknowledge action, metrics, health. Can be excluded for constrained targets (`cargo build -p edgeshield-cli --no-default-features`).
 
 ### `edgeshield-cli`
 
-Binary entry point with `clap` argument parsing. Subcommands: `run`, `default-config`, `completions`.
+Binary entry point with `clap` argument parsing. Subcommands: `run` (daemon), `tui` (terminal dashboard), `default-config`, `completions`. The `tui` subcommand is feature-gated.
 
 ## Layered Architecture
 

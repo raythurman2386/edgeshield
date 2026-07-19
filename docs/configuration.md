@@ -77,6 +77,8 @@ database_path = "/var/lib/edgeshield/edgeshield.db"
 
 When empty, all data is in-memory and lost on restart. When set, devices, alerts, and daily history snapshots persist across restarts.
 
+**Write-back cache**: When SQLite is enabled, the device store uses a write-back cache — the hot path (per-packet updates) hits an in-memory DashMap, and a background task flushes dirty devices to SQLite every 5 seconds (and on shutdown). On an unclean shutdown (`kill -9`, power loss), the last flush interval's counter updates may be lost. The device inventory and last-known state are recovered on the next start. This trade-off is necessary to sustain 10k+ pps on Raspberry Pi — a SQL write per packet cannot keep up.
+
 ### `log_level` (optional)
 
 The log level filter for structured JSON logging.

@@ -169,20 +169,15 @@ pub trait DeviceStore: Send + Sync {
 
 **In-memory implementation**: `MemoryStore` wraps `DashMap<MacAddress, Device>`. `DashMap` provides lock-free concurrent access via sharded internal locks. Reads and writes to different MAC addresses proceed in parallel.
 
-**Future SQLite implementation**: The `DeviceStore` trait is designed for a future SQLite backend. The trait methods map directly to SQL operations:
-
-- `get` → `SELECT * FROM devices WHERE mac = ?`
-- `upsert` → `INSERT INTO devices ... ON CONFLICT(mac) DO UPDATE ...`
-- `list` → `SELECT * FROM devices ORDER BY mac`
-- `count` → `SELECT COUNT(*) FROM devices`
+**SQLite implementation with write-back cache**: `SqliteStore` wraps a `MemoryStore` (DashMap) as the hot-path front-end and tracks dirty MACs in a `DashSet`. The per-packet `get`/`upsert` calls hit the in-memory cache — no SQL, no JSON serialization. A background flush task (every 5 seconds, and on shutdown) persists dirty devices to SQLite. On open, existing devices are loaded from SQLite into the cache so the API and discovery engine see persisted state immediately. Trade-off: on an unclean shutdown, the last flush interval's counter updates may be lost (acceptable for a monitoring tool).
 
 ### API Subsystem
 
-The API subsystem provides an HTTP interface to the device inventory and system metrics.
+The API subsystem provides an HTTP interface to the device inventory, alerts, device history, and system metrics.
 
 **Framework**: Axum 0.7 with Tower middleware.
 
-**State sharing**: `AppState` holds an `Arc<dyn DeviceStore>` and an `Arc<Mutex<mpsc::Receiver<DiscoveryEvent>>>`. The store is shared with the discovery engine. The event receiver is wrapped in a mutex because `mpsc::Receiver` is not `Clone` and not `Sync`.
+**State sharing**: `AppState` holds `Arc<dyn DeviceStore>`, `Arc<dyn AlertStore>`, `Option<Arc<dyn DeviceHistoryStore>>`, `AuthState`, and `Option<Arc<AuditLogger>>`. The stores are shared with the discovery engine and rule engine.
 
 **Endpoints**:
 

@@ -165,30 +165,38 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 
 **Goal**: Visual device inventory and network topology.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| Static file server in API crate | P0 | 0.5 day | — |
-| Device list view (table, sortable) | P0 | 2 days | — |
-| Device detail view (timeline, protocols) | P0 | 2 days | — |
-| Network topology graph (force-directed) | P1 | 3 days | — |
-| Real-time device updates (SSE) | P1 | 2 days | event channel (done) |
-| Alert history view | P1 | 1 day | Phase 5 |
+**Partially delivered**: A terminal UI (`edgeshield tui`) was added ahead of schedule (2026-07-19). It provides a read-only observability dashboard with device inventory, device detail with history sparkline, alerts feed with acknowledge, metrics, and health views. The remaining work is a browser-based web dashboard.
+
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| **Terminal UI (ratatui)** | P1 | 3 days | REST API | ✅ Delivered (feature-gated, `edgeshield tui` subcommand) |
+| Static file server in API crate | P0 | 0.5 day | — | ⬜ |
+| Device list view (table, sortable) | P0 | 2 days | — | ⬜ |
+| Device detail view (timeline, protocols) | P0 | 2 days | — | ⬜ |
+| Network topology graph (force-directed) | P1 | 3 days | — | ⬜ |
+| Real-time device updates (SSE) | P1 | 2 days | event channel (done) | ⬜ |
+| Alert history view | P1 | 1 day | Phase 5 | ⬜ |
 
 **Exit criteria**: Open `http://edgeshield:8080` in a browser, see all devices, click one for details.
 
 ---
 
-## Phase 9: Performance Tuning ⬜
+## Phase 9: Performance Tuning 🔄
 
 **Goal**: Handle 100Mbps sustained on a Pi 4 without dropping packets.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| BPF filter support (capture only relevant traffic) | P0 | 1 day | — |
-| Ring buffer capture (AF_PACKET v3 / TPACKET_V3) | P0 | 3 days | — |
-| Perf benchmarks + regression harness | P1 | 2 days | — |
-| NUMA-aware channel sizing | P2 | 1 day | — |
-| Batch processing (process N packets per yield) | P2 | 2 days | — |
+**Partially delivered**: Three hot-path optimizations shipped ahead of schedule (2026-07-19): (1) single timestamp per packet (halves clock_gettime syscalls), (2) event emission only on state changes (cuts event channel volume ~90%), (3) write-back cache for SqliteStore (eliminates per-packet SQL writes). Together these enable 10k+ pps with persistence enabled on Raspberry Pi 4.
+
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| **Write-back cache for SqliteStore** | P0 | 3 days | — | ✅ Delivered (DashMap front-end, 5s background flush, load-on-open) |
+| **Single timestamp per packet** | P1 | 0.5 day | — | ✅ Delivered (record_sent/record_received take Timestamp arg) |
+| **Event emission only on state changes** | P1 | 1 day | — | ✅ Delivered (DeviceUpdated only on new IP/protocol/hostname/vendor_class) |
+| BPF filter support (capture only relevant traffic) | P0 | 1 day | — | ⬜ |
+| Ring buffer capture (AF_PACKET v3 / TPACKET_V3) | P0 | 3 days | — | ⬜ |
+| Perf benchmarks + regression harness | P1 | 2 days | — | ⬜ |
+| NUMA-aware channel sizing | P2 | 1 day | — | ⬜ |
+| Batch processing (process N packets per yield) | P2 | 2 days | — | ⬜ |
 
 **Exit criteria**: `iperf3` at 100Mbps → zero dropped packets in `edgeshield /metrics`.
 
@@ -228,4 +236,4 @@ These are explicitly out of scope to prevent feature creep:
 
 **Phase 7: Packaging & Distribution** — `.deb` package, Docker image, setup wizard.
 
-**Just shipped**: Phase 6 complete (2026-07-19). API key authentication with SHA-256 hashed keys and constant-time comparison, two permission levels (read-only vs admin), per-IP rate limiting with configurable window/block, TLS via `axum-server` + `rustls`, configurable listen address, audit logging to a separate JSON-lines file, and startup security warnings. New `auth.rs` and `audit.rs` modules in `edgeshield-api`.
+**Just shipped**: Terminal UI (`edgeshield tui`) and hot-path performance optimizations (2026-07-19). The TUI is a ratatui-based read-only observability dashboard over the REST API (devices, alerts, metrics, health views). The performance work includes a write-back cache for SqliteStore (no per-packet SQL writes), single timestamp per packet, and event emission only on state changes — together enabling 10k+ pps with persistence on Raspberry Pi 4.

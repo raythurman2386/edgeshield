@@ -38,6 +38,7 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 - **REST API** — query device inventory, device history, alerts, metrics, and health. Prometheus text metrics endpoint for scraping.
 - **Terminal UI** — optional read-only observability dashboard (`edgeshield tui`) over the REST API. Feature-gated so the daemon binary can be built without it. See [docs/tui.md](docs/tui.md).
 - **API security** — Bearer token authentication with SHA-256 hashed keys, constant-time comparison, read-only vs admin permission levels, per-IP rate limiting, TLS support, and audit logging.
+- **Performance** — write-back cache for SQLite (no per-packet SQL writes), single timestamp per packet, event emission only on state changes. Sustains 10k+ pps on Raspberry Pi 4 with persistence enabled.
 - **Structured JSON logging** — production-ready observability via `tracing`.
 - **Low memory footprint** — designed for Raspberry Pi Zero 2 W and similar constrained hardware.
 - **Privacy-first** — no telemetry, no external calls, no cloud dependency.
@@ -123,7 +124,8 @@ edgeshield/
 │   ├── notify/             # Notifier fan-out (ntfy, MQTT, webhook, email)
 │   ├── api/                # REST API (Axum) + auth + audit
 │   ├── daemon/             # Application orchestrator
-│   └── cli/                # CLI binary entry point
+│   ├── tui/                # Terminal UI (ratatui) — optional, feature-gated
+│   └── cli/                # CLI binary entry point (run, tui, default-config)
 ├── docs/
 │   ├── architecture/       # System architecture documentation
 │   ├── development/        # Developer onboarding and standards
@@ -358,10 +360,10 @@ cargo fmt --check
 | 1 | MVP — Device Discovery & Monitoring | ✅ Complete |
 | 2 | Production Hardening | ✅ Complete |
 | 3 | Persistent Storage (SQLite) | ✅ Complete |
-| 4 | Protocol Depth (DHCP, HTTP, mDNS) | 🔄 Next |
-| 5 | Alerting & Rules | 📅 Planned |
-| 6 | Security & Access Control | 📅 Planned |
-| 7 | Packaging & Distribution | 📅 Planned |
+| 4 | Protocol Depth (DHCP, HTTP, mDNS) | ✅ Complete |
+| 5 | Alerting & Rules | ✅ Complete |
+| 6 | Security & Access Control | ✅ Complete |
+| 7 | Packaging & Distribution | 🔄 Next |
 | 8 | Web Dashboard | 📅 Planned |
 
 See [ROADMAP.md](ROADMAP.md) for the full development roadmap.
