@@ -46,6 +46,11 @@ pub struct NewDevicePayload {
     pub ip: Option<String>,
     /// Hostname, if discovered via DHCP in the triggering packet.
     pub hostname: Option<String>,
+    /// Vendor name from the MAC OUI (IEEE registry), if known.
+    /// Populated by the discovery engine on first sight via the
+    /// `edgeshield-oui` crate. This is what turns a bare MAC into an
+    /// actionable alert ("TP-Link" vs "00:11:22:33:44:55").
+    pub vendor: Option<String>,
     /// Protocol of the first packet that triggered the event.
     pub protocol: String,
     /// ISO 8601 timestamp of when the device was first seen.
@@ -65,6 +70,7 @@ impl NewDevicePayload {
             mac: device.mac.to_string(),
             ip: device.ips.iter().next().map(|ip| ip.to_string()),
             hostname: device.hostname.clone(),
+            vendor: device.vendor.clone(),
             protocol: protocol.to_string(),
             first_seen: device.first_seen.to_string(),
         }
@@ -226,6 +232,7 @@ mod tests {
         let mut device = Device::new(mac);
         device.record_sent(100, Protocol::Tcp);
         device.add_ip("192.168.1.10".parse().unwrap());
+        device.vendor = Some("TP-Link Technologies".to_string());
         device
     }
 
@@ -236,6 +243,7 @@ mod tests {
         assert_eq!(payload.event, "new_device");
         assert_eq!(payload.mac, "00:11:22:33:44:55");
         assert_eq!(payload.ip.as_deref(), Some("192.168.1.10"));
+        assert_eq!(payload.vendor.as_deref(), Some("TP-Link Technologies"));
         assert_eq!(payload.protocol, "TCP");
         assert!(payload.first_seen.contains('T'));
     }
@@ -247,6 +255,7 @@ mod tests {
         let payload = NewDevicePayload::from_device(&device, "ARP");
         assert_eq!(payload.mac, "00:11:22:33:44:55");
         assert!(payload.ip.is_none());
+        assert!(payload.vendor.is_none());
         assert_eq!(payload.protocol, "ARP");
     }
 
@@ -258,6 +267,7 @@ mod tests {
         // Verify the JSON is well-formed and has the expected fields.
         assert!(json.contains("\"event\":\"new_device\""));
         assert!(json.contains("\"mac\":\"00:11:22:33:44:55\""));
+        assert!(json.contains("\"vendor\":\"TP-Link Technologies\""));
         assert!(json.contains("\"protocol\":\"TCP\""));
     }
 }

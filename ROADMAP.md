@@ -96,9 +96,9 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 | NTP detection | P2 | 0.5 day | — | ⬜ |
 | DHCP fingerprint (vendor class) | P2 | 2 days | — | ⬜ |
 | Protocol statistics per device | P1 | 1 day | — | ⬜ |
-| **MAC OUI vendor lookup** | P0 | 1 day | — | ⬜ Next |
-| **Device fingerprint combiner** (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields) | P0 | 1 day | OUI lookup | ⬜ Next |
-| **Enrich MQTT payload with vendor** | P1 | 0.5 day | fingerprint combiner | ⬜ Next |
+| **MAC OUI vendor lookup** | P0 | 1 day | — | ✅ Delivered (39,762 IEEE entries, phf perfect-hash, build-time codegen) |
+| **Device fingerprint combiner** (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields) | P0 | 1 day | OUI lookup | ✅ Delivered (vendor populated on first sight; hostname via DHCP already worked) |
+| **Enrich MQTT payload with vendor** | P1 | 0.5 day | fingerprint combiner | ✅ Delivered |
 
 **Exit criteria**: A device doing DHCP gets its hostname populated. A new-device MQTT alert includes the vendor name. HTTP servers are identified by port + banner.
 
@@ -224,6 +224,6 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 4: Device Fingerprinting** — MAC OUI vendor lookup + fingerprint combiner (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields). This enriches new-device MQTT alerts so they say "TP-Link Smart Plug" instead of "00:11:22:33:44:55".
+**Phase 4: Protocol Depth** — HTTP detection, mDNS/Bonjour, NTP. Device fingerprinting (OUI vendor lookup + MQTT payload enrichment) is delivered.
 
-**Just shipped**: MQTT new-device alerting (`edgeshield-notify` crate, 2026-07-18). See Phase 5 for details.
+**Just shipped**: MAC OUI vendor lookup (`edgeshield-oui` crate, 2026-07-18). 39,762 real IEEE OUI entries compiled into a perfect-hash map at build time. New-device MQTT alerts now include the vendor name.

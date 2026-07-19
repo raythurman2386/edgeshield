@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 use tracing::{info, span, trace, warn, Level};
 
 use edgeshield_common::{Device, Protocol};
+use edgeshield_oui;
 use edgeshield_packet::capture::PacketBuf;
 use edgeshield_packet::decode::{self, DecodedPacket};
 use edgeshield_protocol::classifier;
@@ -118,7 +119,15 @@ impl DiscoveryEngine {
                 Some(d) => d,
                 None => {
                     is_new_src = true;
-                    Device::new(src_mac)
+                    let mut d = Device::new(src_mac);
+                    // Populate the vendor from the MAC OUI on first sight.
+                    // This is a cheap O(1) perfect-hash lookup — safe on the
+                    // hot path. We only do it once per device (at creation),
+                    // not on every packet.
+                    if let Some(vendor) = edgeshield_oui::lookup(&src_mac) {
+                        d.vendor = Some(vendor.to_string());
+                    }
+                    d
                 }
             };
 
@@ -152,7 +161,12 @@ impl DiscoveryEngine {
                 Some(d) => d,
                 None => {
                     is_new_dst = true;
-                    Device::new(dst_mac)
+                    let mut d = Device::new(dst_mac);
+                    // Populate vendor from OUI on first sight (same as src).
+                    if let Some(vendor) = edgeshield_oui::lookup(&dst_mac) {
+                        d.vendor = Some(vendor.to_string());
+                    }
+                    d
                 }
             };
 

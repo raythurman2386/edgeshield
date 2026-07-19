@@ -1,0 +1,13 @@
+[package]
+name = "edgeshield-oui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mac_address.workspace = true
+phf = { version = "0.11", default-features = false }
+
+[build-dependencies]
+phf_codegen = "0.11"
+unicode-width = "0.2"

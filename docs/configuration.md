@@ -148,12 +148,13 @@ Each new-device event is published as a JSON object:
   "mac": "00:11:22:33:44:55",
   "ip": "192.168.1.10",
   "hostname": "living-room-plug",
+  "vendor": "TP-Link Technologies",
   "protocol": "TCP",
   "first_seen": "2026-07-18T12:00:00.000Z"
 }
 ```
 
-Fields are additive only — never renamed or removed without a topic version bump. `ip` and `hostname` are `null` if not yet observed.
+Fields are additive only — never renamed or removed without a topic version bump. `ip`, `hostname`, and `vendor` are `null` if not yet observed. The `vendor` field comes from the IEEE OUI registry (39,000+ entries, embedded at build time for offline use).
 
 #### Home Assistant example
 

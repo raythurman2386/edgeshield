@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/common",
     "crates/config",
+    "crates/oui",
     "crates/telemetry",
     "crates/packet",
     "crates/protocol",
