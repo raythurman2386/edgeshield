@@ -58,15 +58,21 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     telemetry::init(&config.log_level)?;
     info!("EdgeShield starting");
 
-    // 2. Create the device store
+    // 2. Create the device store. When SQLite is configured we keep a
+    // typed `Arc<SqliteStore>` alongside the trait object so the
+    // background flush task can call `flush()` directly (the trait
+    // doesn't expose it — flushing is backend-specific).
+    let mut sqlite_store: Option<Arc<SqliteStore>> = None;
     let store: Arc<dyn DeviceStore> = if config.database_path.is_empty() {
         info!("using in-memory device store");
         Arc::new(MemoryStore::new())
     } else {
         match SqliteStore::open(&config.database_path)? {
             Some(sqlite) => {
-                info!(path = %config.database_path, "using SQLite device store");
-                Arc::new(sqlite)
+                info!(path = %config.database_path, "using SQLite device store (write-back cache)");
+                let arc = Arc::new(sqlite);
+                sqlite_store = Some(arc.clone());
+                arc
             }
             None => {
                 info!("using in-memory device store (no database path)");
@@ -220,6 +226,21 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         None
     };
 
+    // 11c. Start the SQLite write-back flush task (if configured).
+    // The hot path writes to the in-memory DashMap cache; this task
+    // periodically persists dirty devices to SQLite so data survives
+    // restarts. The interval is a trade-off: shorter = less data lost
+    // on an unclean shutdown, longer = fewer SQL writes. 5 seconds
+    // is a reasonable default for a monitoring tool.
+    let flush_handle = if let Some(ref sqlite) = sqlite_store {
+        let flush_store = sqlite.clone();
+        Some(tokio::spawn(async move {
+            flush_task(flush_store, 5).await;
+        }))
+    } else {
+        None
+    };
+
     // 12. Start the API server
     let api_store = store.clone();
     let api_alert_store = alert_store.clone();
@@ -278,6 +299,19 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     }
     if let Some(handle) = history_handle {
         handle.abort();
+    }
+    if let Some(handle) = flush_handle {
+        handle.abort();
+    }
+
+    // Final flush of the write-back cache so the last interval's
+    // updates reach SQLite before the process exits. This is the
+    // main reason we keep a typed `Arc<SqliteStore>` around.
+    if let Some(sqlite) = sqlite_store {
+        match sqlite.flush() {
+            Ok(n) => info!(flushed = n, "final SQLite flush complete"),
+            Err(e) => error!(error = %e, "final SQLite flush failed"),
+        }
     }
 
     info!("EdgeShield stopped");
@@ -390,6 +424,30 @@ async fn history_snapshot_task(
             if let Err(e) = history_store.vacuum() {
                 error!(error = %e, "history: incremental vacuum failed");
             }
+        }
+    }
+}
+
+/// Background flush task for the SQLite write-back cache.
+///
+/// Wakes every `interval_seconds` and calls [`SqliteStore::flush`] to
+/// persist dirty devices from the in-memory DashMap to SQLite. This
+/// keeps the hot path (per-packet `upsert`) off the SQLite mutex so
+/// the pipeline can sustain realistic packet rates on a Raspberry Pi.
+///
+/// The final flush on shutdown is handled separately in `run()` so it
+/// happens after the pipeline task has drained.
+async fn flush_task(store: Arc<SqliteStore>, interval_seconds: u64) {
+    use std::time::Duration;
+
+    info!(interval_seconds, "SQLite write-back flush task starting");
+    let mut ticker = tokio::time::interval(Duration::from_secs(interval_seconds));
+    loop {
+        ticker.tick().await;
+        match store.flush() {
+            Ok(n) if n > 0 => info!(flushed = n, "periodic SQLite flush"),
+            Ok(_) => {}
+            Err(e) => error!(error = %e, "periodic SQLite flush failed"),
         }
     }
 }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{Level, info, span, trace, warn};
 
-use edgeshield_common::{Device, Protocol};
+use edgeshield_common::{Device, Protocol, Timestamp};
 use edgeshield_oui;
 use edgeshield_packet::capture::PacketBuf;
 use edgeshield_packet::decode::{self, DecodedPacket};
@@ -88,7 +88,7 @@ impl DiscoveryEngine {
     /// 1. Decodes the raw packet
     /// 2. Classifies the protocol
     /// 3. Updates the device table
-    /// 4. Emits an event
+    /// 4. Emits an event (only on state changes — see `update_devices`)
     pub async fn process_packet(&self, buf: PacketBuf) {
         let span = span!(Level::TRACE, "process-packet");
         let _guard = span.enter();
@@ -125,6 +125,12 @@ impl DiscoveryEngine {
             None
         };
 
+        // Compute the packet timestamp once and share it across both
+        // the source and destination device updates. This halves the
+        // number of `clock_gettime` syscalls per packet (one instead
+        // of two — one per device in record_sent/record_received).
+        let now = Timestamp::now();
+
         // Step 3: Update device table
         if let Err(e) = self
             .update_devices(
@@ -133,6 +139,7 @@ impl DiscoveryEngine {
                 dhcp_hostname,
                 dhcp_vendor_class,
                 mdns_hostname,
+                now,
             )
             .await
         {
@@ -141,6 +148,13 @@ impl DiscoveryEngine {
     }
 
     /// Update the device table from a decoded packet.
+    ///
+    /// Returns the events that should be emitted. To keep the rule
+    /// engine's event channel from being flooded with counter-only
+    /// updates, `DeviceUpdated` is emitted **only** when something
+    /// meaningful changes: a new IP, a new protocol, a hostname, or a
+    /// vendor. Counter increments (packet_count, bytes) never emit an
+    /// event. `DeviceDiscovered` is always emitted for a new MAC.
     async fn update_devices(
         &self,
         packet: &DecodedPacket<'_>,
@@ -148,6 +162,7 @@ impl DiscoveryEngine {
         dhcp_hostname: Option<String>,
         dhcp_vendor_class: Option<String>,
         mdns_hostname: Option<String>,
+        now: Timestamp,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let src_mac = MacAddress::new(packet.ethernet.source);
         let dst_mac = MacAddress::new(packet.ethernet.destination);
@@ -173,7 +188,15 @@ impl DiscoveryEngine {
                 }
             };
 
-            device.record_sent(packet_len, protocol.clone());
+            // Snapshot the fields we compare to detect meaningful
+            // changes. We compare before/after so counter-only updates
+            // don't emit a DeviceUpdated event.
+            let prev_protocols = device.protocols.clone();
+            let prev_hostname = device.hostname.clone();
+            let prev_vendor_class = device.dhcp_vendor_class.clone();
+            let prev_ip_count = device.ips.len();
+
+            device.record_sent(packet_len, protocol.clone(), now);
 
             // Set hostname from DHCP if available
             if let Some(ref hostname) = dhcp_hostname
@@ -217,9 +240,21 @@ impl DiscoveryEngine {
                     .event_tx
                     .try_send(DiscoveryEvent::DeviceDiscovered(device));
             } else {
-                let _ = self
-                    .event_tx
-                    .try_send(DiscoveryEvent::DeviceUpdated(device));
+                // Only emit DeviceUpdated when something the rule
+                // engine cares about changed: the protocol set, the
+                // hostname, the DHCP vendor class, or the IP set.
+                // Counter-only updates are silent. This keeps the
+                // event channel from being flooded with per-packet
+                // noise on a steady-state network.
+                let changed = device.protocols != prev_protocols
+                    || device.hostname != prev_hostname
+                    || device.dhcp_vendor_class != prev_vendor_class
+                    || device.ips.len() != prev_ip_count;
+                if changed {
+                    let _ = self
+                        .event_tx
+                        .try_send(DiscoveryEvent::DeviceUpdated(device));
+                }
             }
         }
 
@@ -239,7 +274,10 @@ impl DiscoveryEngine {
                 }
             };
 
-            device.record_received(packet_len, protocol.clone());
+            let prev_protocols = device.protocols.clone();
+            let prev_ip_count = device.ips.len();
+
+            device.record_received(packet_len, protocol.clone(), now);
 
             if let Some(ref ip) = packet.ipv4 {
                 device.add_ip(ip.destination);
@@ -254,9 +292,13 @@ impl DiscoveryEngine {
                     .event_tx
                     .try_send(DiscoveryEvent::DeviceDiscovered(device));
             } else {
-                let _ = self
-                    .event_tx
-                    .try_send(DiscoveryEvent::DeviceUpdated(device));
+                let changed =
+                    device.protocols != prev_protocols || device.ips.len() != prev_ip_count;
+                if changed {
+                    let _ = self
+                        .event_tx
+                        .try_send(DiscoveryEvent::DeviceUpdated(device));
+                }
             }
         }
 
@@ -369,8 +411,96 @@ mod tests {
         assert_eq!(device.packet_count, 2);
         assert_eq!(device.bytes_sent, 108);
 
-        // Should have received update events
-        let event = event_rx.try_recv().unwrap();
-        assert!(matches!(event, DiscoveryEvent::DeviceUpdated(_)));
+        // A counter-only update (same protocol, same IPs, no new
+        // hostname/vendor) should NOT emit a DeviceUpdated event —
+        // the event channel stays quiet so the rule engine isn't
+        // flooded with per-packet noise on a steady-state network.
+        assert!(
+            event_rx.try_recv().is_err(),
+            "counter-only update should not emit an event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_discovery_emits_event_on_protocol_change() {
+        let store = Arc::new(MemoryStore::new()) as Arc<dyn DeviceStore>;
+        let (event_tx, mut event_rx) = mpsc::channel::<DiscoveryEvent>(100);
+        let engine = DiscoveryEngine::new(store.clone(), event_tx);
+
+        let src_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let dst_mac = [0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb];
+
+        // First packet: TCP. Both devices are new → DeviceDiscovered.
+        let buf1 = build_test_packet(&src_mac, &dst_mac);
+        engine.process_packet(buf1).await;
+        let _ = event_rx.try_recv(); // src discovered
+        let _ = event_rx.try_recv(); // dst discovered
+
+        // Second packet: same MACs, same protocol (TCP). Counter-only
+        // update → no event.
+        let buf2 = build_test_packet(&src_mac, &dst_mac);
+        engine.process_packet(buf2).await;
+        assert!(
+            event_rx.try_recv().is_err(),
+            "same-protocol update should not emit an event"
+        );
+
+        // Third packet: a new protocol (UDP) from the same src. The
+        // protocol set changes → DeviceUpdated should be emitted for
+        // the src device.
+        let buf3 = build_udp_packet(&src_mac, &dst_mac);
+        engine.process_packet(buf3).await;
+
+        // We expect at least one DeviceUpdated event (for the src
+        // device, whose protocol set grew from {TCP} to {TCP, UDP}).
+        let mut saw_updated = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if matches!(event, DiscoveryEvent::DeviceUpdated(_)) {
+                saw_updated = true;
+            }
+        }
+        assert!(
+            saw_updated,
+            "protocol change should emit a DeviceUpdated event"
+        );
+
+        // Verify the device now has both protocols. The first packet
+        // (TCP dst port 80) is classified as HTTP by the classifier;
+        // the second (UDP port 53) as DNS. The protocol set grows
+        // from {HTTP} to {HTTP, DNS}.
+        let src_mac_addr = MacAddress::new(src_mac);
+        let device = store.get(&src_mac_addr).unwrap().unwrap();
+        assert!(device.protocols.contains(&Protocol::Http));
+        assert!(device.protocols.contains(&Protocol::Dns));
+    }
+
+    /// Build a minimal Ethernet + IPv4 + UDP packet.
+    fn build_udp_packet(src_mac: &[u8; 6], dst_mac: &[u8; 6]) -> PacketBuf {
+        let mut buf = Vec::with_capacity(42);
+
+        // Ethernet header (14 bytes)
+        buf.extend_from_slice(dst_mac);
+        buf.extend_from_slice(src_mac);
+        buf.extend_from_slice(&[0x08, 0x00]); // IPv4
+
+        // IPv4 header (20 bytes)
+        buf.push(0x45); // version + IHL
+        buf.push(0x00);
+        buf.extend_from_slice(&[0x00, 0x1e]); // total length 30
+        buf.extend_from_slice(&[0x00, 0x00]);
+        buf.extend_from_slice(&[0x40, 0x00]);
+        buf.push(0x40); // TTL
+        buf.push(0x11); // protocol UDP
+        buf.extend_from_slice(&[0x00, 0x00]); // checksum
+        buf.extend_from_slice(&[0xc0, 0xa8, 0x01, 0x01]); // src
+        buf.extend_from_slice(&[0xc0, 0xa8, 0x01, 0x02]); // dst
+
+        // UDP header (8 bytes)
+        buf.extend_from_slice(&[0x00, 0x35]); // src port 53
+        buf.extend_from_slice(&[0x00, 0x35]); // dst port 53
+        buf.extend_from_slice(&[0x00, 0x0a]); // length 10
+        buf.extend_from_slice(&[0x00, 0x00]); // checksum
+
+        PacketBuf::new(buf, 14)
     }
 }

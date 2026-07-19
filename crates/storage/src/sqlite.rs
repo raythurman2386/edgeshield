@@ -4,6 +4,20 @@
 //! daemon restarts. Uses `rusqlite` with the `bundled` feature so no
 //! system SQLite library is required.
 //!
+//! # Write-back cache
+//!
+//! The hot path (per-packet `get`/`upsert` from the discovery engine)
+//! hits an in-memory `MemoryStore` (DashMap) — lock-free, no SQL, no
+//! JSON serialization. A background task calls [`SqliteStore::flush`]
+//! periodically (and on shutdown) to persist dirty devices to SQLite.
+//!
+//! On an unclean shutdown (kill -9, power loss), the last flush
+//! interval's worth of counter updates may be lost. For a passive
+//! monitoring tool this is acceptable — the device inventory and
+//! last-known counters are recovered on the next flush, and the
+//! alternative (a SQL write per packet) cannot sustain realistic
+//! packet rates on a Raspberry Pi.
+//!
 //! # Schema
 //!
 //! ```sql
@@ -32,27 +46,34 @@
 //!
 //! # Concurrency
 //!
-//! `rusqlite::Connection` is `Send` but not `Sync`. We wrap it in a
-//! `Mutex` to allow shared access from the capture pipeline and API
-//! server. For the expected throughput (thousands of packets/sec, not
-//! millions), this is more than adequate. A future optimization could
-//! use a connection pool or WAL mode for concurrent reads.
+//! The DashMap is lock-free for the hot path. `flush` takes the
+//! SQLite `Mutex<Connection>` and the dirty set, but runs on a
+//! background task that doesn't contend with the capture pipeline.
+//! The API server reads from the DashMap, so it never blocks on
+//! SQLite either.
 
 use std::sync::Mutex;
 
+use dashmap::DashSet;
 use mac_address::MacAddress;
 use rusqlite::{Connection, params};
 use tracing::{info, trace};
 
 use edgeshield_common::{Device, Protocol, StorageError, Timestamp};
 
-use crate::store::DeviceStore;
+use crate::store::{DeviceStore, MemoryStore};
 
-/// A SQLite-backed device store.
+/// A SQLite-backed device store with a write-back cache.
 ///
-/// Creates the database and schema on construction. All device operations
-/// are serialized through a `Mutex<Connection>`.
+/// See the crate-level docs for the write-back cache design and
+/// trade-offs.
 pub struct SqliteStore {
+    /// In-memory write-back cache — the hot-path store.
+    cache: MemoryStore,
+    /// MACs modified since the last flush. Tracked so `flush` only
+    /// writes devices that changed, not the full table every time.
+    dirty: DashSet<MacAddress>,
+    /// SQLite connection, serialized for flush operations.
     conn: Mutex<Connection>,
 }
 
@@ -98,10 +119,110 @@ impl SqliteStore {
         // mean the migration already ran.
         Self::migrate(&conn)?;
 
-        info!(path = %path, "SQLite store opened");
+        // Load existing devices into the in-memory cache so the API
+        // and discovery engine see persisted state immediately.
+        let cache = MemoryStore::new();
+        let loaded = Self::load_all(&conn, &cache)?;
+
+        info!(path = %path, loaded = loaded, "SQLite store opened (write-back cache)");
         Ok(Some(Self {
+            cache,
+            dirty: DashSet::new(),
             conn: Mutex::new(conn),
         }))
+    }
+
+    /// Load all devices from SQLite into the in-memory cache. Called
+    /// once on open so the cache reflects persisted state.
+    fn load_all(conn: &Connection, cache: &MemoryStore) -> Result<usize, StorageError> {
+        let mut stmt = conn
+            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices")
+            .map_err(|e| StorageError::Internal(format!("load prepare failed: {}", e)))?;
+        let rows = stmt
+            .query_map([], Self::row_to_device)
+            .map_err(|e| StorageError::Internal(format!("load query failed: {}", e)))?;
+
+        let mut count = 0;
+        for row in rows {
+            let device =
+                row.map_err(|e| StorageError::Internal(format!("load row parse failed: {}", e)))?;
+            cache.upsert(device)?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Flush all dirty devices to SQLite. Called by the daemon's
+    /// background flush task on a fixed interval and on shutdown.
+    ///
+    /// This takes the SQLite connection lock, iterates the dirty set,
+    /// and upserts each dirty device. The dirty set is cleared on
+    /// success. Devices modified during the flush will be caught by
+    /// the next flush — the dirty set is a `DashSet`, so concurrent
+    /// `upsert` calls during flush are safe.
+    pub fn flush(&self) -> Result<usize, StorageError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
+
+        // Snapshot the dirty MACs so we can clear the set while
+        // holding the connection lock. New writes during the flush
+        // will re-add to the dirty set and be caught next time.
+        let dirty_macs: Vec<MacAddress> = self.dirty.iter().map(|r| *r).collect();
+        if dirty_macs.is_empty() {
+            return Ok(0);
+        }
+
+        let mut written = 0;
+        for mac in &dirty_macs {
+            let Some(device) = self.cache.get(mac)? else {
+                // Device was deleted (not currently supported, but
+                // be defensive). Remove from dirty set.
+                continue;
+            };
+            conn.execute(
+                "INSERT INTO devices (mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(mac) DO UPDATE SET
+                    ips = excluded.ips,
+                    hostname = excluded.hostname,
+                    last_seen = excluded.last_seen,
+                    packet_count = excluded.packet_count,
+                    bytes_sent = excluded.bytes_sent,
+                    bytes_received = excluded.bytes_received,
+                    protocols = excluded.protocols,
+                    vendor = excluded.vendor,
+                    dhcp_vendor_class = excluded.dhcp_vendor_class,
+                    protocol_stats = excluded.protocol_stats",
+                params![
+                    device.mac.to_string(),
+                    Self::ips_to_json(&device.ips),
+                    device.hostname,
+                    device.first_seen.to_string(),
+                    device.last_seen.to_string(),
+                    device.packet_count,
+                    device.bytes_sent,
+                    device.bytes_received,
+                    Self::protocols_to_json(&device.protocols),
+                    device.vendor,
+                    device.dhcp_vendor_class,
+                    Self::protocol_stats_to_json(&device.protocol_stats),
+                ],
+            )
+            .map_err(|e| StorageError::Internal(format!("flush upsert failed: {}", e)))?;
+            written += 1;
+        }
+
+        // Clear the dirty entries we just flushed.
+        for mac in &dirty_macs {
+            self.dirty.remove(mac);
+        }
+
+        if written > 0 {
+            trace!(written, "flushed dirty devices to SQLite");
+        }
+        Ok(written)
     }
 
     /// Run additive schema migrations. Each `ALTER TABLE ADD COLUMN`
@@ -283,105 +404,26 @@ impl SqliteStore {
 
 impl DeviceStore for SqliteStore {
     fn get(&self, mac: &MacAddress) -> Result<Option<Device>, StorageError> {
-        trace!(%mac, "sqlite store: get");
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
-
-        let mut stmt = conn
-            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices WHERE mac = ?1")
-            .map_err(|e| StorageError::Internal(format!("query prepare failed: {}", e)))?;
-
-        let mut rows = stmt
-            .query(params![mac.to_string()])
-            .map_err(|e| StorageError::Internal(format!("query failed: {}", e)))?;
-
-        match rows
-            .next()
-            .map_err(|e| StorageError::Internal(format!("row fetch failed: {}", e)))?
-        {
-            Some(row) => Ok(Some(Self::row_to_device(row).map_err(|e| {
-                StorageError::Internal(format!("row parse failed: {}", e))
-            })?)),
-            None => Ok(None),
-        }
+        // Hot path: read from the in-memory cache. No SQL, no lock.
+        self.cache.get(mac)
     }
 
     fn upsert(&self, device: Device) -> Result<(), StorageError> {
-        trace!(mac = %device.mac, "sqlite store: upsert");
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
-
-        conn.execute(
-            "INSERT INTO devices (mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-             ON CONFLICT(mac) DO UPDATE SET
-                ips = excluded.ips,
-                hostname = excluded.hostname,
-                last_seen = excluded.last_seen,
-                packet_count = excluded.packet_count,
-                bytes_sent = excluded.bytes_sent,
-                bytes_received = excluded.bytes_received,
-                protocols = excluded.protocols,
-                vendor = excluded.vendor,
-                dhcp_vendor_class = excluded.dhcp_vendor_class,
-                protocol_stats = excluded.protocol_stats",
-            params![
-                device.mac.to_string(),
-                Self::ips_to_json(&device.ips),
-                device.hostname,
-                device.first_seen.to_string(),
-                device.last_seen.to_string(),
-                device.packet_count,
-                device.bytes_sent,
-                device.bytes_received,
-                Self::protocols_to_json(&device.protocols),
-                device.vendor,
-                device.dhcp_vendor_class,
-                Self::protocol_stats_to_json(&device.protocol_stats),
-            ],
-        ).map_err(|e| StorageError::Internal(format!("upsert failed: {}", e)))?;
-
+        // Hot path: write to the in-memory cache and mark dirty. No
+        // SQL, no connection lock. The background flush task will
+        // persist this to SQLite on the next tick.
+        self.cache.upsert(device.clone())?;
+        self.dirty.insert(device.mac);
         Ok(())
     }
 
     fn list(&self) -> Result<Vec<Device>, StorageError> {
-        trace!("sqlite store: list");
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
-
-        let mut stmt = conn
-            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices ORDER BY mac")
-            .map_err(|e| StorageError::Internal(format!("query prepare failed: {}", e)))?;
-        let rows = stmt
-            .query_map([], Self::row_to_device)
-            .map_err(|e| StorageError::Internal(format!("query failed: {}", e)))?;
-
-        let mut devices = Vec::new();
-        for row in rows {
-            devices
-                .push(row.map_err(|e| StorageError::Internal(format!("row fetch failed: {}", e)))?);
-        }
-
-        Ok(devices)
+        // Hot path: list from the in-memory cache.
+        self.cache.list()
     }
 
     fn count(&self) -> Result<usize, StorageError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
-            .map_err(|e| StorageError::Internal(format!("count query failed: {}", e)))?;
-
-        Ok(count as usize)
+        self.cache.count()
     }
 }
 
@@ -442,11 +484,11 @@ mod tests {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
 
         let mut device = test_device("00:11:22:33:44:55");
-        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(100, Protocol::Tcp, Timestamp::now());
         store.upsert(device).unwrap();
 
         let mut device2 = test_device("00:11:22:33:44:55");
-        device2.record_sent(200, Protocol::Udp);
+        device2.record_sent(200, Protocol::Udp, Timestamp::now());
         store.upsert(device2).unwrap();
 
         let retrieved = store.get(&mac).unwrap().unwrap();
@@ -460,9 +502,10 @@ mod tests {
         let store = open_test_store();
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
-        device.record_sent(200, Protocol::Udp);
-        device.record_sent(300, Protocol::Dns);
+        let now = Timestamp::now();
+        device.record_sent(100, Protocol::Tcp, now);
+        device.record_sent(200, Protocol::Udp, now);
+        device.record_sent(300, Protocol::Dns, now);
         device.add_ip("192.168.1.10".parse().unwrap());
 
         store.upsert(device.clone()).unwrap();
@@ -477,7 +520,10 @@ mod tests {
 
     #[test]
     fn test_sqlite_store_persistence() {
-        // Open, write, close, reopen — verify data survives
+        // Open, write, flush, close, reopen — verify data survives.
+        // The write-back cache only persists on flush (or shutdown);
+        // without an explicit flush the data stays in memory and is
+        // lost when the connection drops.
         let path = format!("/tmp/edgeshield-test-{}.db", std::process::id());
         let _ = std::fs::remove_file(&path);
 
@@ -485,6 +531,7 @@ mod tests {
             let store = SqliteStore::open(&path).unwrap().unwrap();
             store.upsert(test_device("00:11:22:33:44:55")).unwrap();
             store.upsert(test_device("00:11:22:33:44:66")).unwrap();
+            store.flush().unwrap();
         } // connection drops, file persists
 
         {
@@ -535,9 +582,10 @@ mod tests {
         let store = open_test_store();
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
-        device.record_sent(200, Protocol::Tcp);
-        device.record_sent(50, Protocol::Mdns);
+        let now = Timestamp::now();
+        device.record_sent(100, Protocol::Tcp, now);
+        device.record_sent(200, Protocol::Tcp, now);
+        device.record_sent(50, Protocol::Mdns, now);
         device.dhcp_vendor_class = Some("android-dhcp-13".to_string());
 
         store.upsert(device.clone()).unwrap();
@@ -559,9 +607,10 @@ mod tests {
         {
             let store = SqliteStore::open(&path).unwrap().unwrap();
             let mut device = test_device("00:11:22:33:44:55");
-            device.record_sent(100, Protocol::Tcp);
+            device.record_sent(100, Protocol::Tcp, Timestamp::now());
             device.dhcp_vendor_class = Some("MSFT 5.0".to_string());
             store.upsert(device).unwrap();
+            store.flush().unwrap();
         }
 
         {
@@ -570,6 +619,85 @@ mod tests {
             let retrieved = store.get(&mac).unwrap().unwrap();
             assert_eq!(retrieved.dhcp_vendor_class.as_deref(), Some("MSFT 5.0"));
             assert_eq!(retrieved.protocol_stats.get(&Protocol::Tcp), Some(&1));
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writeback_cache_flush_persists_dirty() {
+        // Upsert goes to the cache; flush writes to SQLite; reopen
+        // sees the persisted data.
+        let path = format!("/tmp/edgeshield-writeback-{}.db", std::process::id());
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            let mut device = test_device("00:11:22:33:44:55");
+            device.record_sent(100, Protocol::Tcp, Timestamp::now());
+            store.upsert(device).unwrap();
+
+            // Before flush, the data is in the cache but not yet in
+            // SQLite. A fresh open (new cache) would not see it.
+            assert_eq!(store.count().unwrap(), 1);
+
+            // Flush writes the dirty device to SQLite.
+            let written = store.flush().unwrap();
+            assert_eq!(written, 1);
+
+            // After flush, the dirty set is empty. A second flush is a no-op.
+            let written2 = store.flush().unwrap();
+            assert_eq!(written2, 0);
+        }
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            assert_eq!(store.count().unwrap(), 1);
+            let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+            let device = store.get(&mac).unwrap().unwrap();
+            assert_eq!(device.bytes_sent, 100);
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_writeback_cache_marks_dirty_on_upsert() {
+        // A fresh store has an empty dirty set. After an upsert, the
+        // device's MAC is dirty. After flush, it's clean.
+        let store = open_test_store();
+        let device = test_device("00:11:22:33:44:55");
+        store.upsert(device).unwrap();
+
+        // Flush should write exactly one device.
+        let written = store.flush().unwrap();
+        assert_eq!(written, 1);
+
+        // A second flush with no new upserts writes nothing.
+        let written2 = store.flush().unwrap();
+        assert_eq!(written2, 0);
+    }
+
+    #[test]
+    fn test_writeback_cache_loads_existing_on_open() {
+        // Devices persisted to SQLite should appear in the cache on
+        // the next open, without any explicit load call.
+        let path = format!("/tmp/edgeshield-load-{}.db", std::process::id());
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            store.upsert(test_device("00:11:22:33:44:55")).unwrap();
+            store.upsert(test_device("00:11:22:33:44:66")).unwrap();
+            store.flush().unwrap();
+        }
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            // The cache should be pre-populated from SQLite.
+            assert_eq!(store.count().unwrap(), 2);
+            let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+            assert!(store.get(&mac).unwrap().is_some());
         }
 
         let _ = std::fs::remove_file(&path);

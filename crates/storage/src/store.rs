@@ -142,11 +142,19 @@ mod tests {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
 
         let mut device = test_device("00:11:22:33:44:55");
-        device.record_sent(100, edgeshield_common::Protocol::Tcp);
+        device.record_sent(
+            100,
+            edgeshield_common::Protocol::Tcp,
+            edgeshield_common::Timestamp::now(),
+        );
         store.upsert(device).unwrap();
 
         let mut device2 = test_device("00:11:22:33:44:55");
-        device2.record_sent(200, edgeshield_common::Protocol::Udp);
+        device2.record_sent(
+            200,
+            edgeshield_common::Protocol::Udp,
+            edgeshield_common::Timestamp::now(),
+        );
         store.upsert(device2).unwrap();
 
         let retrieved = store.get(&mac).unwrap().unwrap();

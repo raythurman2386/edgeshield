@@ -414,7 +414,11 @@ mod tests {
         // Add a test device
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, edgeshield_common::Protocol::Tcp);
+        device.record_sent(
+            100,
+            edgeshield_common::Protocol::Tcp,
+            edgeshield_common::Timestamp::now(),
+        );
         device.add_ip("192.168.1.10".parse().unwrap());
         store.upsert(device).unwrap();
 

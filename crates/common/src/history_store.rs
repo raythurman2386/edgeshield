@@ -138,7 +138,7 @@ mod tests {
     fn sample_device() -> Device {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(100, Protocol::Tcp, Timestamp::now());
         device.add_ip("192.168.1.10".parse().unwrap());
         device.vendor = Some("TP-Link".to_string());
         device.hostname = Some("living-room-plug".to_string());
@@ -178,7 +178,7 @@ mod tests {
         let device = sample_device();
         let snapshot = DeviceHistorySnapshot::from_device(&device, "2026-07-19".to_string());
         let mut device = device;
-        device.record_sent(999, Protocol::Udp);
+        device.record_sent(999, Protocol::Udp, Timestamp::now());
         device.hostname = Some("changed".to_string());
         // The snapshot should be unchanged.
         assert_eq!(snapshot.packet_count, 1);

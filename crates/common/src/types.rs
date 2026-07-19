@@ -132,25 +132,30 @@ impl Device {
     /// Uses `saturating_add` so counters never panic on overflow (debug)
     /// nor wrap silently (release). A long-running appliance must not
     /// crash or corrupt counters under adversarial traffic.
-    pub fn record_sent(&mut self, bytes: u64, protocol: Protocol) {
+    ///
+    /// The caller supplies `now` so a single packet that updates both
+    /// the source and destination devices can share one timestamp
+    /// read (one `clock_gettime` syscall per packet instead of two).
+    pub fn record_sent(&mut self, bytes: u64, protocol: Protocol, now: Timestamp) {
         self.packet_count = self.packet_count.saturating_add(1);
         self.bytes_sent = self.bytes_sent.saturating_add(bytes);
         self.protocols.insert(protocol.clone());
         let entry = self.protocol_stats.entry(protocol).or_insert(0);
         *entry = entry.saturating_add(1);
-        self.last_seen = Timestamp::now();
+        self.last_seen = now;
     }
 
     /// Record a packet received by this device.
     ///
-    /// See `record_sent` for the saturating-arithmetic rationale.
-    pub fn record_received(&mut self, bytes: u64, protocol: Protocol) {
+    /// See `record_sent` for the saturating-arithmetic and shared-
+    /// timestamp rationale.
+    pub fn record_received(&mut self, bytes: u64, protocol: Protocol, now: Timestamp) {
         self.packet_count = self.packet_count.saturating_add(1);
         self.bytes_received = self.bytes_received.saturating_add(bytes);
         self.protocols.insert(protocol.clone());
         let entry = self.protocol_stats.entry(protocol).or_insert(0);
         *entry = entry.saturating_add(1);
-        self.last_seen = Timestamp::now();
+        self.last_seen = now;
     }
 
     /// Add an IP address to this device.
@@ -189,7 +194,7 @@ mod tests {
     fn test_device_record_sent() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(100, Protocol::Tcp, Timestamp::now());
         assert_eq!(device.packet_count, 1);
         assert_eq!(device.bytes_sent, 100);
         assert!(device.protocols.contains(&Protocol::Tcp));
@@ -199,7 +204,7 @@ mod tests {
     fn test_device_record_received() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_received(200, Protocol::Udp);
+        device.record_received(200, Protocol::Udp, Timestamp::now());
         assert_eq!(device.packet_count, 1);
         assert_eq!(device.bytes_received, 200);
         assert!(device.protocols.contains(&Protocol::Udp));
@@ -227,8 +232,9 @@ mod tests {
     fn test_device_serde_roundtrip() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
-        device.record_received(200, Protocol::Udp);
+        let now = Timestamp::now();
+        device.record_sent(100, Protocol::Tcp, now);
+        device.record_received(200, Protocol::Udp, now);
         device.add_ip("192.168.1.10".parse().unwrap());
 
         let json = serde_json::to_string_pretty(&device).unwrap();
@@ -246,9 +252,10 @@ mod tests {
     fn test_protocol_stats_incremented_on_record_sent() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
-        device.record_sent(200, Protocol::Tcp);
-        device.record_sent(50, Protocol::Udp);
+        let now = Timestamp::now();
+        device.record_sent(100, Protocol::Tcp, now);
+        device.record_sent(200, Protocol::Tcp, now);
+        device.record_sent(50, Protocol::Udp, now);
         assert_eq!(device.protocol_stats.get(&Protocol::Tcp), Some(&2));
         assert_eq!(device.protocol_stats.get(&Protocol::Udp), Some(&1));
         assert_eq!(device.protocol_stats.get(&Protocol::Dns), None);
@@ -258,9 +265,10 @@ mod tests {
     fn test_protocol_stats_incremented_on_record_received() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_received(100, Protocol::Dns);
-        device.record_received(100, Protocol::Dns);
-        device.record_received(100, Protocol::Dns);
+        let now = Timestamp::now();
+        device.record_received(100, Protocol::Dns, now);
+        device.record_received(100, Protocol::Dns, now);
+        device.record_received(100, Protocol::Dns, now);
         assert_eq!(device.protocol_stats.get(&Protocol::Dns), Some(&3));
     }
 
@@ -276,8 +284,9 @@ mod tests {
     fn test_protocol_stats_serde_roundtrip() {
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
-        device.record_sent(200, Protocol::Mdns);
+        let now = Timestamp::now();
+        device.record_sent(100, Protocol::Tcp, now);
+        device.record_sent(200, Protocol::Mdns, now);
         device.dhcp_vendor_class = Some("MSFT 5.0".to_string());
 
         let json = serde_json::to_string(&device).unwrap();

@@ -367,8 +367,9 @@ mod tests {
     fn sample_device(mac_str: &str, packets: u64) -> Device {
         let mac = MacAddress::from_str(mac_str).unwrap();
         let mut device = Device::new(mac);
+        let now = Timestamp::now();
         for _ in 0..packets {
-            device.record_sent(100, Protocol::Tcp);
+            device.record_sent(100, Protocol::Tcp, now);
         }
         device.hostname = Some("test-device".to_string());
         device.vendor = Some("TestVendor".to_string());

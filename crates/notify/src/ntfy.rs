@@ -215,7 +215,7 @@ mod tests {
         // without changing their parsers.
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
         let mut device = Device::new(mac);
-        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(100, Protocol::Tcp, edgeshield_common::Timestamp::now());
         device.add_ip("192.168.1.10".parse().unwrap());
         device.vendor = Some("TP-Link Technologies".to_string());
 
