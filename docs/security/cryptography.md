@@ -13,7 +13,7 @@ This document describes the cryptographic standards that will be used and the ra
 | TLS for API | Not implemented | MVP is read-only, no sensitive data in transit |
 | API authentication | Not implemented | MVP is read-only, deployed on trusted networks |
 | Password hashing | Not implemented | No user accounts in MVP |
-| Data encryption at rest | Not implemented | No persistent storage in MVP |
+| Data encryption at rest | Not implemented | Persistent storage (SQLite) exists, but device metadata is not classified as sensitive; encryption at rest is deferred until threat model requires it |
 | Binary signing | Not implemented | Pre-release, no distribution infrastructure |
 | Configuration integrity | Not implemented | Configuration is not sensitive |
 

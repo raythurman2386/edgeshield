@@ -125,11 +125,9 @@ impl DiscoveryEngine {
             device.record_sent(packet_len, protocol.clone());
 
             // Set hostname from DHCP if available
-            if let Some(ref hostname) = dhcp_hostname {
-                if device.hostname.is_none() {
-                    device.hostname = Some(hostname.clone());
-                    info!(mac = %src_mac, hostname = %hostname, "hostname discovered via DHCP");
-                }
+            if let Some(ref hostname) = dhcp_hostname && device.hostname.is_none() {
+                device.hostname = Some(hostname.clone());
+                info!(mac = %src_mac, hostname, "hostname discovered via DHCP");
             }
 
             if let Some(ref ip) = packet.ipv4 {
@@ -179,7 +177,7 @@ impl DiscoveryEngine {
     }
 
     /// Get a reference to the device store.
-    pub fn store(&self) -> &Arc<dyn DeviceStore> {
+    #[must_use] pub fn store(&self) -> &Arc<dyn DeviceStore> {
         &self.store
     }
 }

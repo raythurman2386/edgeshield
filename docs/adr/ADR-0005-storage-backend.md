@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted — **Updated 2026-07-18**: SQLite was implemented ahead of schedule (Phase 3, not Phase 6). Both `MemoryStore` and `SqliteStore` now ship and are selected at runtime by the `database_path` config key. The original decision text below is preserved as a historical record; the “SQLite will be added in Phase 6” and “unnecessary for the MVP” statements are superseded by the current implementation.
 
 ## Context
 

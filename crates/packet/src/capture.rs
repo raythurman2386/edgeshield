@@ -60,8 +60,13 @@ impl PacketBuf {
     }
 
     /// Get the network-layer payload (skipping the link header).
+    ///
+    /// Returns an empty slice for runt frames shorter than the link header
+    /// rather than panicking. The decoder treats an empty payload as a
+    /// `Truncated` error downstream, so this is defense in depth — the
+    /// capture thread must never crash on a malformed frame.
     pub fn network_payload(&self) -> &[u8] {
-        &self.raw[self.link_header_len..]
+        self.raw.get(self.link_header_len..).unwrap_or(&[])
     }
 }
 
@@ -127,7 +132,7 @@ impl CaptureSession {
 
                 Self::capture_loop(&thread_interface, &tx, &stop_rx);
             })
-            .map_err(|e| PacketError::Capture(format!("failed to spawn capture thread: {}", e)))?;
+            .map_err(|e| PacketError::Capture(format!("failed to spawn capture thread: {e}")))?;
 
         info!("capture started on {}", interface_name);
 
@@ -178,6 +183,13 @@ impl CaptureSession {
                 }
             };
 
+            // Compute the link-layer header length from the *actual* datalink
+            // type reported by pcap. Hardcoding 14 (Ethernet) silently breaks
+            // on Linux cooked captures (SLL, 16 bytes — common in containers
+            // and the `any` interface), raw IP (0 bytes), and VLAN-tagged
+            // frames. See `linktype_to_header_len` for the mapping.
+            let link_header_len = linktype_to_header_len(cap.get_datalink());
+
             // Read packets from the interface
             loop {
                 // Check if we should stop
@@ -189,7 +201,7 @@ impl CaptureSession {
                 match cap.next_packet() {
                     Ok(packet) => {
                         consecutive_errors = 0;
-                        let buf = PacketBuf::new(packet.data.to_vec(), 14);
+                        let buf = PacketBuf::new(packet.data.to_vec(), link_header_len);
                         if tx.try_send(buf).is_err() {
                             // Channel full — packet dropped. Intentional backpressure.
                         }
@@ -247,6 +259,40 @@ impl CaptureSession {
         }
         if let Some(handle) = self.thread_handle.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+/// Map a pcap datalink type to the length of its link-layer header in bytes.
+///
+/// This is the single source of truth for "where does the network-layer
+/// payload start in a captured frame." Getting this wrong silently
+/// corrupts every decoded packet — see the SLL/VLAN note in `capture_loop`.
+///
+/// # Known link types
+///
+/// | DLT | Name              | Header len |
+/// |-----|-------------------|------------|
+/// | 1   | EN10MB (Ethernet) | 14         |
+/// | 12  | RAW (raw IP)      | 0          |
+/// | 113 | LINUX_SLL         | 16         |
+///
+/// Unknown link types default to 14 (Ethernet) with a warning. This is a
+/// pragmatic default for a homelab appliance; a stricter deployment should
+/// treat unknown link types as a capture-open failure.
+fn linktype_to_header_len(linktype: pcap::Linktype) -> usize {
+    match linktype.0 {
+        1 => 14,   // EN10MB — Ethernet II
+        12 => 0,    // RAW — raw IP, no link-layer header
+        113 => 16,  // LINUX_SLL — Linux cooked capture (the `any` device)
+        other => {
+            warn!(
+                link_type = other,
+                "unknown pcap link type; assuming 14-byte Ethernet header. \
+                 If packets decode incorrectly, the interface may use a \
+                 different link-layer framing."
+            );
+            14
         }
     }
 }

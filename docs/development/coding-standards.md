@@ -4,14 +4,22 @@ This document provides detailed engineering standards for contributors to EdgeSh
 
 ## Rust Version and Edition
 
-EdgeShield targets Rust 1.75.0 as the minimum supported Rust version (MSRV). The crate uses the 2021 edition.
+EdgeShield targets Rust 1.85.0 as the minimum supported Rust version (MSRV), the first stable release of the 2024 edition. The crate uses the 2024 edition.
 
 ```toml
 # Cargo.toml
-edition = "2021"
+edition = "2024"
 ```
 
 The MSRV is enforced in CI. If a dependency requires a newer Rust version, the dependency must be pinned or replaced.
+
+### Notable 2024 edition changes in this codebase
+
+- `unsafe` attributes on extern blocks are required (`unsafe extern "C"`); we avoid `unsafe` in `common`.
+- `gen` is a reserved keyword; not used here.
+- Lifetime capture rules are stricter; the `DecodedPacket<'a>` borrow into `PacketBuf` relies on the 2024 capture rules.
+- `#[must_use]` on constructors that return `Self` (e.g., `Device::new`) is now idiomatic and enforced by clippy.
+- `rust_2024_compatibility` lint group is enabled by default; run `cargo fix --edition` when migrating further.
 
 ## Crate Organization
 
@@ -63,10 +71,10 @@ pub type Timestamp = DateTime<Utc>;
 
 ### Enums
 
-Use enums for fixed sets of variants. Mark public enums as `#[non_exhaustive]` to allow future additions without breaking changes:
+Use enums for fixed sets of variants. The current `Protocol` enum reflects every protocol the classifier can produce today:
 
 ```rust
-#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Protocol {
     Arp,
     Ipv4,
@@ -74,9 +82,17 @@ pub enum Protocol {
     Tcp,
     Udp,
     Dns,
+    Dhcp,
+    Http,
+    Https,
+    Mdns,
+    Ntp,
+    /// Unknown protocol identified by its IP protocol number.
     Other(u8),
 }
 ```
+
+Do **not** pre-declare variants the classifier does not yet produce. Add a variant only when `classify()` actually returns it, so exhaustive `match` stays a reliable signal. If a public enum is part of a stable API contract, mark it `#[non_exhaustive]` to allow additions without a breaking semver bump; `Protocol` is internal to the workspace and is not marked `#[non_exhaustive]` for that reason.
 
 ### Error types
 

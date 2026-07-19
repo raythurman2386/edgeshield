@@ -30,7 +30,7 @@ impl Timestamp {
     }
 
     /// Create a timestamp from a `DateTime<Utc>`.
-    pub fn from_datetime(dt: DateTime<Utc>) -> Self {
+    pub const fn from_datetime(dt: DateTime<Utc>) -> Self {
         Self(dt)
     }
 

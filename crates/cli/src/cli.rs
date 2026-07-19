@@ -64,16 +64,15 @@ fn check_interface(iface: &str) {
 fn acquire_pid_file() -> Result<(), anyhow::Error> {
     let path = PathBuf::from(PID_FILE);
 
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            if unsafe { libc::kill(pid as i32, 0) == 0 } {
-                anyhow::bail!(
-                    "EdgeShield is already running (PID {}). \
-                     If this is incorrect, remove {} and try again.",
-                    pid, PID_FILE
-                );
-            }
-        }
+    if let Ok(content) = fs::read_to_string(&path)
+        && let Ok(pid) = content.trim().parse::<u32>()
+        && unsafe { libc::kill(pid as i32, 0) == 0 }
+    {
+        anyhow::bail!(
+            "EdgeShield is already running (PID {}). \
+             If this is incorrect, remove {} and try again.",
+            pid, PID_FILE
+        );
     }
 
     if let Some(parent) = path.parent() {
@@ -90,10 +89,12 @@ fn release_pid_file() {
 
 /// Try to load config from the given path, falling back to common locations.
 fn load_config(path: &str) -> Result<edgeshield_config::config::Config, anyhow::Error> {
+    // Try the explicit path first
     if let Ok(cfg) = edgeshield_config::config::Config::from_file(path) {
         return Ok(cfg);
     }
 
+    // Try common fallback paths
     let fallbacks = [
         "/etc/edgeshield/config.toml",
         "/usr/local/etc/edgeshield/config.toml",
@@ -102,11 +103,8 @@ fn load_config(path: &str) -> Result<edgeshield_config::config::Config, anyhow::
     ];
 
     for fb in &fallbacks {
-        if fb == &path {
-            continue;
-        }
-        if let Ok(cfg) = edgeshield_config::config::Config::from_file(fb) {
-            eprintln!("info: loaded config from fallback path: {}", fb);
+        if fb != &path && let Ok(cfg) = edgeshield_config::config::Config::from_file(fb) {
+            eprintln!("info: loaded config from fallback path: {fb}");
             return Ok(cfg);
         }
     }

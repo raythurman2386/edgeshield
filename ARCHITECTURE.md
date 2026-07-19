@@ -102,6 +102,10 @@ pub trait DeviceStore: Send + Sync {
 
 The `DiscoveryEngine` is the stateful core. It holds an `Arc<dyn DeviceStore>` and an event sender. The `process_packet()` method runs the full decode-classify-update pipeline for a single packet.
 
+### `edgeshield-notify`
+
+MQTT notification delivery. Consumes `DiscoveryEvent`s from the discovery engine and publishes new-device events as JSON to an MQTT broker. Disabled by default; enabled by the `[mqtt]` config table. The notifier owns the event receiver — the API no longer holds it. This keeps notification (outbound) separate from the API (inbound).
+
 ### `edgeshield-api`
 
 Axum-based REST API with four endpoints. `AppState` holds the shared store and event receiver. Route handlers are standalone functions for testability.
@@ -111,14 +115,15 @@ Axum-based REST API with four endpoints. `AppState` holds the shared store and e
 The orchestrator. Wires together all subsystems in the `run()` function:
 
 1. Initialize telemetry
-2. Create `MemoryStore`
+2. Create the device store — `MemoryStore` (DashMap) when `database_path` is empty, otherwise `SqliteStore` backed by the configured SQLite file. Both implement the `DeviceStore` trait and are shared as `Arc<dyn DeviceStore>`.
 3. Create event channel
 4. Create `DiscoveryEngine`
-5. Start `CaptureSession`
-6. Spawn API server task
-7. Spawn pipeline task
-8. Wait for `SIGINT`/`SIGTERM`
-9. Graceful shutdown
+5. Start the MQTT notifier (if `[mqtt]` is configured) — owns the event receiver
+6. Start `CaptureSession`
+7. Spawn API server task
+8. Spawn pipeline task
+9. Wait for `SIGINT`/`SIGTERM`
+10. Graceful shutdown
 
 ### `edgeshield-cli`
 
@@ -134,11 +139,13 @@ graph BT
     DAEMON --> PACKET[edgeshield-packet]
     DAEMON --> PROTOCOL[edgeshield-protocol]
     DAEMON --> DISCOVERY[edgeshield-discovery]
+    DAEMON --> NOTIFY[edgeshield-notify]
     DAEMON --> API[edgeshield-api]
     DAEMON --> STORAGE[edgeshield-storage]
     DISCOVERY --> PACKET
     DISCOVERY --> PROTOCOL
     DISCOVERY --> STORAGE
+    NOTIFY --> DISCOVERY
     API --> STORAGE
     PACKET --> COMMON[edgeshield-common]
     PROTOCOL --> COMMON
@@ -159,7 +166,7 @@ Dependencies flow **inward** toward `edgeshield-common`. No crate at a lower lay
 | 1 (Infrastructure) | `config`, `telemetry` | `common` |
 | 2 (Data Plane) | `packet`, `protocol`, `storage` | `common`, `packet` → `common` |
 | 3 (Logic) | `discovery` | `common`, `packet`, `protocol`, `storage` |
-| 4 (Interface) | `api` | `common`, `discovery`, `storage` |
+| 4 (Interface) | `api`, `notify` | `common`, `discovery`, `storage` |
 | 5 (Application) | `daemon` | all above |
 | 6 (Entry) | `cli` | `daemon`, `config` |
 
@@ -236,7 +243,7 @@ EdgeShield follows Rust's ownership model strictly:
 1. **Packet buffers**: `PacketBuf` wraps `bytes::Bytes`, which is a refcounted, `'static` slice. Cloning a `PacketBuf` bumps the reference count — no data copy. The buffer is allocated once by pnet and shared through the pipeline.
 2. **Decoded headers**: Header fields are copied into owned structs. This is the right tradeoff because header fields are small (MAC: 6 bytes, IP: 4-16 bytes, ports: 2 bytes) and owned structs are `Send + Sync` without lifetime complexity.
 3. **Device records**: `Device` is `Clone`. The store returns cloned records to avoid holding locks across await points. Updates are read-modify-write under a single shard lock (DashMap).
-4. **Store sharing**: `Arc<dyn DeviceStore>` is the sharing primitive. The pipeline and API server each hold an `Arc` to the same `MemoryStore`.
+4. **Store sharing**: `Arc<dyn DeviceStore>` is the sharing primitive. The pipeline and API server each hold an `Arc` to the same store instance, which is either a `MemoryStore` or a `SqliteStore` depending on configuration.
 
 ## Threading Model
 
@@ -293,7 +300,7 @@ EdgeShield is designed for extensibility from day one:
 
 ### `DeviceStore` trait
 
-The storage backend is abstracted behind a trait. The MVP uses `MemoryStore` (DashMap). Future implementations can add SQLite, PostgreSQL, or any other backend without changing the discovery or API layers.
+The storage backend is abstracted behind a trait. Two implementations ship today: `MemoryStore` (DashMap, default when no `database_path` is configured) and `SqliteStore` (persistent, selected when `database_path` is set). Additional backends (PostgreSQL, etc.) can be added by implementing `DeviceStore` without changing the discovery or API layers.
 
 ```rust
 pub trait DeviceStore: Send + Sync {
