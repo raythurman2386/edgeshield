@@ -1,0 +1,26 @@
+[package]
+name = "edgeshield-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ratatui = "0.30"
+crossterm = { version = "0.28", features = ["event-stream"] }
+tokio = { workspace = true, features = ["full", "signal", "sync", "time"] }
+tokio-stream = "0.1"
+futures = "0.3"
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+edgeshield-common = { path = "../common" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }
+axum = { workspace = true }
+edgeshield-common = { path = "../common" }
+mac_address = { workspace = true }

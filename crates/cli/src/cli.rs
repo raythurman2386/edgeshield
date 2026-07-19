@@ -32,6 +32,25 @@ pub enum Command {
         /// Shell to generate for (bash or zsh).
         shell: String,
     },
+    /// Launch the read-only observability dashboard (TUI).
+    ///
+    /// Connects to a running daemon over its REST API and renders
+    /// live device, alert, metrics, and health state. The TUI holds
+    /// no authoritative state of its own — it is a thin client over
+    /// the daemon's existing endpoints. The only mutation it performs
+    /// is acknowledging an alert (`POST /alerts/:id/acknowledge`).
+    #[cfg(feature = "tui")]
+    Tui {
+        /// Base URL of the daemon's REST API.
+        #[arg(long, env = "EDGESHIELD_URL", default_value = "http://localhost:8080")]
+        url: String,
+        /// Bearer token for the daemon's REST API (admin key required for ack).
+        #[arg(long, env = "EDGESHIELD_KEY")]
+        key: Option<String>,
+        /// Refresh interval in milliseconds.
+        #[arg(long, default_value_t = 2000)]
+        refresh_ms: u64,
+    },
 }
 
 /// Check if the process is running as root (UID 0).
@@ -124,7 +143,7 @@ _edgeshield() {{
     _init_completion || return
 
     if [[ $cword -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "run default-config completions" -- "$cur"))
+        COMPREPLY=($(compgen -W "run default-config completions tui" -- "$cur"))
         return
     fi
 
@@ -136,6 +155,20 @@ _edgeshield() {{
                     ;;
                 *)
                     COMPREPLY=($(compgen -W "-c --config" -- "$cur"))
+                    ;;
+            esac
+            ;;
+        tui)
+            case "$prev" in
+                --url)
+                    ;;
+                --key)
+                    ;;
+                --refresh-ms)
+                    COMPREPLY=($(compgen -W "1000 2000 5000" -- "$cur"))
+                    ;;
+                *)
+                    COMPREPLY=($(compgen -W "--url --key --refresh-ms" -- "$cur"))
                     ;;
             esac
             ;;
@@ -156,6 +189,7 @@ _edgeshield() {{
         'run:Start the EdgeShield daemon'
         'default-config:Print the default configuration'
         'completions:Generate shell completion script'
+        'tui:Launch the read-only observability dashboard'
     )
 
     _arguments \\
@@ -171,6 +205,12 @@ _edgeshield() {{
                 run)
                     _arguments \
                         '(-c --config)'{{-c,--config}}'[Path to configuration file]:config file:_files'
+                    ;;
+                tui)
+                    _arguments \
+                        '--url[Base URL of the daemon REST API]:url' \
+                        '--key[Bearer token for the daemon REST API]:key' \
+                        '--refresh-ms[Refresh interval in milliseconds]:ms'
                     ;;
             esac
             ;;
@@ -214,6 +254,23 @@ database_path = ""
                 _ => anyhow::bail!("unsupported shell '{}'. Use 'bash' or 'zsh'.", shell),
             }
             Ok(())
+        }
+        #[cfg(feature = "tui")]
+        Command::Tui {
+            url,
+            key,
+            refresh_ms,
+        } => {
+            let args = edgeshield_tui::Args {
+                url,
+                key,
+                refresh_ms,
+            };
+            // run() owns its own tokio runtime; block_on it from the
+            // existing runtime (it spawns a nested runtime via
+            // Runtime::new, which is fine because we're not holding
+            // any async resources across the call).
+            edgeshield_tui::run(args)
         }
     }
 }

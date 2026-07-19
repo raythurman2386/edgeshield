@@ -36,6 +36,7 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 - **Rule engine** — user-configurable rules with five condition types: `new_device`, `new_device_by_vendor`, `new_device_by_mac_prefix`, `device_offline`, `protocol_change`. Per-device per-rule cooldown (debounce). Alert acknowledgment with suppression.
 - **Multi-channel alerting** — ntfy.sh, MQTT, webhook (Slack/Discord/Teams-compatible), and SMTP email. All channels run simultaneously via the notifier fan-out.
 - **REST API** — query device inventory, device history, alerts, metrics, and health. Prometheus text metrics endpoint for scraping.
+- **Terminal UI** — optional read-only observability dashboard (`edgeshield tui`) over the REST API. Feature-gated so the daemon binary can be built without it. See [docs/tui.md](docs/tui.md).
 - **API security** — Bearer token authentication with SHA-256 hashed keys, constant-time comparison, read-only vs admin permission levels, per-IP rate limiting, TLS support, and audit logging.
 - **Structured JSON logging** — production-ready observability via `tracing`.
 - **Low memory footprint** — designed for Raspberry Pi Zero 2 W and similar constrained hardware.
