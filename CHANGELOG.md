@@ -9,23 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Rule engine** (`edgeshield-rules` crate): evaluates user-configured rules against discovery events and emits `Alert`s. Five condition types: `new_device`, `new_device_by_vendor`, `new_device_by_mac_prefix`, `device_offline` (with `after_seconds` threshold), and `protocol_change`. Per-device per-rule cooldown tracking prevents alert floods. Alert acknowledgment suppresses future alerts for the same device/rule combination.
-- **Inline TOML rules** (`edgeshield-config`): rules live in `config.toml` as `[[rules]]` tables. No separate rules file needed. Validated at parse time (name, severity, condition).
-- **Multi-notifier fan-out** (`edgeshield-notify`): all configured notifiers (ntfy, MQTT, webhook, email) receive every alert simultaneously. New `Notifier` trait and `NotifierFanout` dispatcher. A slow notifier doesn't block others.
-- **Webhook notification channel** (`edgeshield-notify`): POSTs alerts as JSON to any HTTP endpoint. Compatible with Slack, Discord, Microsoft Teams, and generic webhooks. Supports Bearer token auth and custom headers.
-- **Email notification channel** (`edgeshield-notify`): sends alerts as plain-text emails via SMTP (lettre crate). Supports STARTTLS (port 587) and implicit TLS (port 465). No local MTA required.
-- **Device offline scanner** (`edgeshield-daemon`): background task wakes every 60s (configurable via `[scanner] interval_seconds`), lists all devices, and emits `DeviceOffline` events for devices silent for more than 60 seconds. The rule engine evaluates these against `device_offline` rules.
-- **Default new_device rule**: if no `[[rules]]` are configured, a default `new_device` rule runs (preserving pre-Phase-5 behavior — every new MAC triggers an alert).
-- **Alert types** (`edgeshield-common`): new `Alert`, `Severity` (info/warning/critical), `AlertEventType` (new_device/device_offline/protocol_change/custom), and `AlertId` types.
-- **AlertStore trait** (`edgeshield-rules`): storage abstraction for alerts with an in-memory implementation. `insert_alert`, `list_alerts` (with filter), `get_alert`, `acknowledge_alert`, `delete_alert`, `is_acknowledged`, `count_alerts`.
-- **`DiscoveryEvent::DeviceOffline`** variant for the offline scanner.
+- **SQLite alert store** (`edgeshield-storage`): new `SqliteAlertStore` persists alert history to the same SQLite database as devices. Alert history now survives daemon restarts. Schema includes indexes on timestamp, mac, and acknowledged for fast queries.
+- **`/alerts` API endpoints** (`edgeshield-api`): four new endpoints for alert management — `GET /alerts` (list with filters: severity, acknowledged, rule, limit), `GET /alerts/:id` (single alert), `POST /alerts/:id/acknowledge` (mark as acknowledged), `DELETE /alerts/:id` (delete alert).
+- **Prometheus text metrics** (`edgeshield-api`): new `GET /metrics/prometheus` endpoint returning metrics in Prometheus text exposition format. Exposes `edgeshield_devices_total`, `edgeshield_packets_total`, `edgeshield_bytes_total`, `edgeshield_uptime_seconds`, and `edgeshield_alerts_total`. The existing JSON `/metrics` endpoint is preserved for programmatic consumption.
+- **`AlertStore` trait moved to `edgeshield-common`** to break a circular dependency between `edgeshield-rules` and `edgeshield-storage`. Both crates now depend on `common` for the trait; `InMemoryAlertStore` remains in `rules`, `SqliteAlertStore` is in `storage`.
 
 ### Changed
 
-- **Notify crate refactored**: notifiers now consume `Alert`s (not `DiscoveryEvent`s) via the `Notifier` trait. The rule engine is the single consumer of `DiscoveryEvent`s. The `notify` crate no longer depends on `edgeshield-discovery`.
-- **NtfyNotifier**: constructor takes `NtfyConfig` only (no `event_rx`); implements `Notifier` trait.
-- **MqttNotifier**: constructor takes `MqttConfig` only; implements `Notifier` trait; connection polling moved to a background task.
-- **Daemon wiring**: rule engine sits between discovery and notification; fanout dispatches alerts to all notifiers.
+- **Daemon wiring**: alert store now uses `SqliteAlertStore` when `database_path` is configured, falling back to `InMemoryAlertStore` only when in-memory. The API server receives the alert store alongside the device store.
+- **API `AppState`**: now holds both `Arc<dyn DeviceStore>` and `Arc<dyn AlertStore>`. The `serve()` function takes both.
 
 ## [0.1.0] - 2026-07-18
 

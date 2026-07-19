@@ -17,3 +17,6 @@ mac_address.workspace = true
 hex.workspace = true
 edgeshield-common = { path = "../common" }
 edgeshield-storage = { path = "../storage" }
+
+[dev-dependencies]
+edgeshield-rules = { path = "../rules" }

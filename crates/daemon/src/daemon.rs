@@ -41,6 +41,7 @@ use edgeshield_discovery::discovery::{DiscoveryEngine, DiscoveryEvent};
 use edgeshield_notify::{Notifier, EmailNotifier, MqttNotifier, NtfyNotifier, WebhookNotifier};
 use edgeshield_packet::capture::CaptureSession;
 use edgeshield_rules::store::InMemoryAlertStore;
+use edgeshield_storage::SqliteAlertStore;
 use edgeshield_rules::{Rule, RuleCondition, RuleEngine};
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
@@ -106,9 +107,24 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         ));
     }
 
-    // 6. Create the alert store (in-memory for now; SQLite alert
-    // persistence is a follow-up).
-    let alert_store = Arc::new(InMemoryAlertStore::new());
+    // 6. Create the alert store. Use SQLite if a database path is
+    // configured (same file as the device store), otherwise fall back
+    // to in-memory. SQLite alert history survives restarts.
+    let alert_store: Arc<dyn edgeshield_common::AlertStore> = if config.database_path.is_empty() {
+        info!("using in-memory alert store");
+        Arc::new(InMemoryAlertStore::new())
+    } else {
+        match SqliteAlertStore::open(&config.database_path)? {
+            Some(store) => {
+                info!(path = %config.database_path, "using SQLite alert store");
+                Arc::new(store)
+            }
+            None => {
+                info!("using in-memory alert store (SQLite open returned None)");
+                Arc::new(InMemoryAlertStore::new())
+            }
+        }
+    };
 
     // 7. Create the alert channel (rule engine → notifier fanout)
     let (alert_tx, alert_rx) = mpsc::channel::<edgeshield_common::Alert>(256);
@@ -184,10 +200,11 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         None
     };
 
-    // 6. Start the API server
+    // 12. Start the API server
     let api_store = store.clone();
+    let api_alert_store = alert_store.clone();
     let api_handle = tokio::spawn(async move {
-        if let Err(e) = api::serve(config.api_port, api_store).await {
+        if let Err(e) = api::serve(config.api_port, api_store, api_alert_store).await {
             error!(error = %e, "API server error");
         }
     });

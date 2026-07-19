@@ -57,9 +57,9 @@
 | CI pipeline (cargo test, clippy, fmt) | ✅ | `.gitea/workflows/ci.yaml` — push + PR on main |
 | Man page (`edgeshield(8)`) | ✅ | `dist/edgeshield.8` — full man page with synopsis, options, endpoints |
 | Bash/Zsh completions | ✅ | `edgeshield completions bash` / `edgeshield completions zsh` |
-| Prometheus text metrics on /metrics | ⬜ | JSON endpoint exists; Prometheus text format deferred to Phase 3 |
-| Config reload (SIGHUP) | ⬜ | Deferred to Phase 3 — requires config watch infrastructure |
-| Log rotation support (file appender) | ⬜ | Deferred to Phase 3 — tracing subscriber file layer |
+| Prometheus text metrics on /metrics | ✅ | New `/metrics/prometheus` endpoint in Prometheus text exposition format (devices_total, packets_total, bytes_total, uptime_seconds, alerts_total) |
+| Config reload (SIGHUP) | ⬜ | Deferred — daemon restarts in <1s; systemd handles restarts. Hot-reload across 5+ subsystems is not worth the complexity for a homelab tool. |
+| Log rotation support (file appender) | ⬜ | Deferred — systemd's journald handles rotation automatically when running as a service. |
 
 **Exit criteria**: `cargo clippy --all-targets -- -D warnings` passes. ✅
 
@@ -121,7 +121,7 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 | **Multi-notifier fan-out** | P0 | 1 day | rule engine | ✅ Delivered (all configured notifiers receive every alert) |
 | **Alert acknowledgment + suppression** | P1 | 1 day | rule engine | ✅ Delivered (acknowledged alerts suppress future alerts for same device/rule combo) |
 | **Per-rule cooldown (debounce)** | P1 | 1 day | — | ✅ Delivered (per-device per-rule cooldown tracking) |
-| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine | ⬜ Deferred to Phase 8 (Web Dashboard) — alerts persisted in-memory for now |
+| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine | ✅ Delivered (SQLite `SqliteAlertStore`; `/alerts`, `/alerts/:id`, `POST /alerts/:id/acknowledge`, `DELETE /alerts/:id` endpoints; alert history survives restarts) |
 
 **Exit criteria**: Configure a rule that emails you when a new MAC appears. Configure another that webhooks when a known device goes silent for 30 min. MQTT new-device alerts already work today. ✅ All met.
 

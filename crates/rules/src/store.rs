@@ -1,70 +1,17 @@
-//! Alert storage abstraction.
+//! Alert storage — in-memory implementation and re-exports.
 //!
-//! Defines the `AlertStore` trait for persisting alerts. The rule
-//! engine uses this to persist alerts before delivering them to
-//! notifiers, and to check acknowledgment status for suppression.
-//!
-//! # Why a separate trait from `DeviceStore`?
-//!
-//! `DeviceStore` is about the live device inventory (updated on every
-//! packet). `AlertStore` is about the alert history (append-mostly,
-//! queried for the `/alerts` API). Keeping them separate means:
-//! - The SQLite implementation can use a separate table with its own
-//!   schema and indexes.
-//! - The in-memory implementation (for tests) doesn't pollute the
-//!   device store.
-//! - Future backends (e.g., a dedicated time-series store for alerts)
-//!   can swap in without touching device storage.
+//! The `AlertStore` trait and `AlertFilter` live in `edgeshield-common`
+//! to avoid a circular dependency between `edgeshield-rules` and
+//! `edgeshield-storage`. This module provides the in-memory
+//! implementation (for tests) and re-exports the trait.
+
+pub use edgeshield_common::{AlertFilter, AlertStore};
 
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use edgeshield_common::{Alert, AlertId, StorageError};
 use mac_address::MacAddress;
-
-/// A storage backend for alert records.
-pub trait AlertStore: Send + Sync {
-    /// Insert a new alert. Returns the assigned alert ID.
-    fn insert_alert(&self, alert: &Alert) -> Result<AlertId, StorageError>;
-
-    /// List alerts, optionally filtered. Returns most-recent first.
-    fn list_alerts(&self, filter: AlertFilter) -> Result<Vec<Alert>, StorageError>;
-
-    /// Get a single alert by ID.
-    fn get_alert(&self, id: AlertId) -> Result<Option<Alert>, StorageError>;
-
-    /// Mark an alert as acknowledged. Returns an error if the alert
-    /// doesn't exist.
-    fn acknowledge_alert(&self, id: AlertId) -> Result<(), StorageError>;
-
-    /// Delete an alert by ID.
-    fn delete_alert(&self, id: AlertId) -> Result<(), StorageError>;
-
-    /// Check if there's an acknowledged alert for the given
-    /// rule/device combination. Used by the rule engine for
-    /// acknowledgment-based suppression.
-    fn is_acknowledged(
-        &self,
-        rule_name: &str,
-        mac: &MacAddress,
-    ) -> Result<bool, StorageError>;
-
-    /// Get the total alert count.
-    fn count_alerts(&self) -> Result<usize, StorageError>;
-}
-
-/// Filter for listing alerts. All fields are optional.
-#[derive(Debug, Clone, Default)]
-pub struct AlertFilter {
-    /// Filter by severity (exact match).
-    pub severity: Option<edgeshield_common::Severity>,
-    /// Filter by acknowledged status.
-    pub acknowledged: Option<bool>,
-    /// Filter by rule name (exact match).
-    pub rule_name: Option<String>,
-    /// Maximum number of alerts to return. `None` = no limit.
-    pub limit: Option<usize>,
-}
 
 /// An in-memory `AlertStore` backed by `DashMap`. Used for tests and
 /// as a fallback when SQLite is not configured.

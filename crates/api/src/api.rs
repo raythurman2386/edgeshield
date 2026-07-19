@@ -1,13 +1,14 @@
 //! REST API for EdgeShield.
 //!
 //! This module provides the Axum-based HTTP server that exposes
-//! device inventory, health checks, and metrics.
+//! device inventory, health checks, metrics, and alert history.
 
 use std::sync::Arc;
 
 use axum::Router;
 use tracing::info;
 
+use edgeshield_common::AlertStore;
 use edgeshield_storage::store::DeviceStore;
 
 use crate::routes;
@@ -17,6 +18,8 @@ use crate::routes;
 pub struct AppState {
     /// The device store (shared with the discovery engine).
     pub store: Arc<dyn DeviceStore>,
+    /// The alert store (shared with the rule engine).
+    pub alert_store: Arc<dyn AlertStore>,
 }
 
 /// Start the REST API server.
@@ -25,24 +28,31 @@ pub struct AppState {
 ///
 /// * `port` - The port to listen on
 /// * `store` - The shared device store
+/// * `alert_store` - The shared alert store
 ///
 /// # Design
 ///
 /// The API server runs on a separate tokio task from the capture pipeline.
 /// It shares the device store via `Arc<dyn DeviceStore>`, which is lock-free
-/// for reads (DashMap). Discovery events are consumed by the notifier
-/// crate (MQTT publisher), not by the API.
+/// for reads (DashMap). Discovery events are consumed by the rule engine,
+/// not by the API.
 pub async fn serve(
     port: u16,
     store: Arc<dyn DeviceStore>,
+    alert_store: Arc<dyn AlertStore>,
 ) -> Result<(), anyhow::Error> {
-    let state = AppState { store };
+    let state = AppState { store, alert_store };
 
     let app = Router::new()
         .route("/health", axum::routing::get(routes::health))
         .route("/devices", axum::routing::get(routes::list_devices))
         .route("/devices/:mac", axum::routing::get(routes::get_device))
         .route("/metrics", axum::routing::get(routes::metrics))
+        .route("/metrics/prometheus", axum::routing::get(routes::metrics_prometheus))
+        .route("/alerts", axum::routing::get(routes::list_alerts))
+        .route("/alerts/:id", axum::routing::get(routes::get_alert))
+        .route("/alerts/:id/acknowledge", axum::routing::post(routes::acknowledge_alert))
+        .route("/alerts/:id", axum::routing::delete(routes::delete_alert))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");

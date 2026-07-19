@@ -18,11 +18,13 @@
 //!   a stable foundation.
 
 pub mod alert;
+pub mod alert_store;
 pub mod error;
 pub mod time;
 pub mod types;
 
 pub use alert::*;
+pub use alert_store::{AlertFilter, AlertStore};
 pub use error::*;
 pub use time::*;
 pub use types::*;

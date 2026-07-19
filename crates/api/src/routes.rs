@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{span, Level};
 
-use edgeshield_common::Device;
+use edgeshield_common::{Alert, AlertFilter, Device};
 
 use crate::api::AppState;
 
@@ -138,6 +138,188 @@ pub async fn metrics(
     }))
 }
 
+/// GET /metrics/prometheus
+///
+/// Returns metrics in Prometheus text exposition format. This is the
+/// format Prometheus scrapers expect (unlike the JSON `/metrics`
+/// endpoint, which is for human/programmatic consumption).
+///
+/// Exposed metrics:
+/// - `edgeshield_devices_total` — total number of discovered devices
+/// - `edgeshield_packets_total` — total packets observed
+/// - `edgeshield_bytes_total` — total bytes observed
+/// - `edgeshield_uptime_seconds` — daemon uptime in seconds
+/// - `edgeshield_alerts_total` — total alerts in the alert store
+pub async fn metrics_prometheus(
+    State(state): State<AppState>,
+) -> Result<String, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-metrics-prometheus");
+    let _guard = span.enter();
+
+    let devices = state.store.list().map_err(|e| {
+        tracing::error!(error = %e, "failed to list devices for prometheus metrics");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to compute metrics".to_string(),
+        )
+    })?;
+
+    let total_devices = devices.len();
+    let total_packets: u64 = devices.iter().map(|d| d.packet_count).sum();
+    let total_bytes: u64 = devices.iter().map(|d| d.bytes_sent + d.bytes_received).sum();
+    let uptime_seconds = server_start().elapsed().as_secs();
+    let total_alerts = state.alert_store.count_alerts().unwrap_or(0);
+
+    // Prometheus text exposition format (v0.0.4).
+    // Each metric has a HELP line (description) and TYPE line (counter/gauge).
+    let body = format!(
+        "# HELP edgeshield_devices_total Total number of discovered devices.\n\
+         # TYPE edgeshield_devices_total gauge\n\
+         edgeshield_devices_total {total_devices}\n\
+         # HELP edgeshield_packets_total Total packets observed across all devices.\n\
+         # TYPE edgeshield_packets_total counter\n\
+         edgeshield_packets_total {total_packets}\n\
+         # HELP edgeshield_bytes_total Total bytes observed across all devices.\n\
+         # TYPE edgeshield_bytes_total counter\n\
+         edgeshield_bytes_total {total_bytes}\n\
+         # HELP edgeshield_uptime_seconds Daemon uptime in seconds.\n\
+         # TYPE edgeshield_uptime_seconds gauge\n\
+         edgeshield_uptime_seconds {uptime_seconds}\n\
+         # HELP edgeshield_alerts_total Total alerts in the alert store.\n\
+         # TYPE edgeshield_alerts_total gauge\n\
+         edgeshield_alerts_total {total_alerts}\n"
+    );
+
+    Ok(body)
+}
+
+/// GET /alerts
+///
+/// Returns the alert history, optionally filtered. Query params:
+/// - `severity` — filter by severity (info, warning, critical)
+/// - `acknowledged` — filter by acknowledged status (true, false)
+/// - `rule` — filter by rule name
+/// - `limit` — maximum number of alerts to return
+pub async fn list_alerts(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<Alert>>, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-list-alerts");
+    let _guard = span.enter();
+
+    let mut filter = AlertFilter::default();
+    if let Some(sev) = params.get("severity") {
+        filter.severity = std::str::FromStr::from_str(sev).ok();
+    }
+    if let Some(ack) = params.get("acknowledged") {
+        filter.acknowledged = match ack.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+    }
+    if let Some(rule) = params.get("rule") {
+        filter.rule_name = Some(rule.clone());
+    }
+    if let Some(limit) = params.get("limit") {
+        filter.limit = limit.parse().ok();
+    }
+
+    match state.alert_store.list_alerts(filter) {
+        Ok(alerts) => Ok(Json(alerts)),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list alerts");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to list alerts".to_string(),
+            ))
+        }
+    }
+}
+
+/// GET /alerts/{id}
+///
+/// Returns a single alert by ID.
+pub async fn get_alert(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Alert>, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-get-alert", id = %id);
+    let _guard = span.enter();
+
+    let id: u64 = id.parse().map_err(|_| {
+        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
+    })?;
+
+    match state.alert_store.get_alert(id) {
+        Ok(Some(alert)) => Ok(Json(alert)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("alert not found: {id}"),
+        )),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to get alert");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to get alert".to_string(),
+            ))
+        }
+    }
+}
+
+/// POST /alerts/{id}/acknowledge
+///
+/// Marks an alert as acknowledged. Acknowledged alerts suppress future
+/// alerts for the same device/rule combination.
+pub async fn acknowledge_alert(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-ack-alert", id = %id);
+    let _guard = span.enter();
+
+    let id: u64 = id.parse().map_err(|_| {
+        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
+    })?;
+
+    match state.alert_store.acknowledge_alert(id) {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to acknowledge alert");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to acknowledge alert".to_string(),
+            ))
+        }
+    }
+}
+
+/// DELETE /alerts/{id}
+///
+/// Deletes an alert by ID.
+pub async fn delete_alert(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-delete-alert", id = %id);
+    let _guard = span.enter();
+
+    let id: u64 = id.parse().map_err(|_| {
+        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
+    })?;
+
+    match state.alert_store.delete_alert(id) {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to delete alert");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to delete alert".to_string(),
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +329,7 @@ mod tests {
         routing::get,
         Router,
     };
+    use edgeshield_common::AlertStore;
     use edgeshield_storage::memory::MemoryStore;
     use edgeshield_storage::store::DeviceStore;
     use std::str::FromStr;
@@ -155,6 +338,8 @@ mod tests {
 
     fn test_app() -> Router {
         let store = Arc::new(MemoryStore::new()) as Arc<dyn DeviceStore>;
+        let alert_store = Arc::new(edgeshield_rules::store::InMemoryAlertStore::new())
+            as Arc<dyn AlertStore>;
 
         // Add a test device
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
@@ -163,7 +348,7 @@ mod tests {
         device.add_ip("192.168.1.10".parse().unwrap());
         store.upsert(device).unwrap();
 
-        let state = AppState { store };
+        let state = AppState { store, alert_store };
 
         Router::new()
             .route("/health", get(health))
