@@ -11,7 +11,7 @@ use axum::{
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
-use tracing::{span, Level};
+use tracing::{Level, span};
 
 use edgeshield_common::{Alert, AlertFilter, Device};
 
@@ -84,20 +84,23 @@ pub async fn get_device(
     let mac_clean = mac.replace(':', "");
     let bytes: [u8; 6] = hex::decode(&mac_clean)
         .map_err(|_| {
-            (StatusCode::BAD_REQUEST, format!("invalid MAC address: {mac_orig}"))
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid MAC address: {mac_orig}"),
+            )
         })?
         .try_into()
         .map_err(|_| {
-            (StatusCode::BAD_REQUEST, format!("invalid MAC address length: {mac_orig}"))
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid MAC address length: {mac_orig}"),
+            )
         })?;
     let mac = MacAddress::new(bytes);
 
     match state.store.get(&mac) {
         Ok(Some(device)) => Ok(Json(device)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            format!("device not found: {mac}"),
-        )),
+        Ok(None) => Err((StatusCode::NOT_FOUND, format!("device not found: {mac}"))),
         Err(e) => {
             tracing::error!(error = %e, "failed to get device");
             Err((
@@ -127,7 +130,10 @@ pub async fn metrics(
 
     let total_devices = devices.len();
     let total_packets: u64 = devices.iter().map(|d| d.packet_count).sum();
-    let total_bytes: u64 = devices.iter().map(|d| d.bytes_sent + d.bytes_received).sum();
+    let total_bytes: u64 = devices
+        .iter()
+        .map(|d| d.bytes_sent + d.bytes_received)
+        .sum();
     let uptime_seconds = server_start().elapsed().as_secs();
 
     Ok(Json(MetricsResponse {
@@ -166,7 +172,10 @@ pub async fn metrics_prometheus(
 
     let total_devices = devices.len();
     let total_packets: u64 = devices.iter().map(|d| d.packet_count).sum();
-    let total_bytes: u64 = devices.iter().map(|d| d.bytes_sent + d.bytes_received).sum();
+    let total_bytes: u64 = devices
+        .iter()
+        .map(|d| d.bytes_sent + d.bytes_received)
+        .sum();
     let uptime_seconds = server_start().elapsed().as_secs();
     let total_alerts = state.alert_store.count_alerts().unwrap_or(0);
 
@@ -247,16 +256,13 @@ pub async fn get_alert(
     let span = span!(Level::INFO, "api-get-alert", id = %id);
     let _guard = span.enter();
 
-    let id: u64 = id.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
-    })?;
+    let id: u64 = id
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}")))?;
 
     match state.alert_store.get_alert(id) {
         Ok(Some(alert)) => Ok(Json(alert)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            format!("alert not found: {id}"),
-        )),
+        Ok(None) => Err((StatusCode::NOT_FOUND, format!("alert not found: {id}"))),
         Err(e) => {
             tracing::error!(error = %e, "failed to get alert");
             Err((
@@ -278,9 +284,9 @@ pub async fn acknowledge_alert(
     let span = span!(Level::INFO, "api-ack-alert", id = %id);
     let _guard = span.enter();
 
-    let id: u64 = id.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
-    })?;
+    let id: u64 = id
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}")))?;
 
     match state.alert_store.acknowledge_alert(id) {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
@@ -304,9 +310,9 @@ pub async fn delete_alert(
     let span = span!(Level::INFO, "api-delete-alert", id = %id);
     let _guard = span.enter();
 
-    let id: u64 = id.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}"))
-    })?;
+    let id: u64 = id
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, format!("invalid alert id: {id}")))?;
 
     match state.alert_store.delete_alert(id) {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
@@ -324,10 +330,10 @@ pub async fn delete_alert(
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Method, Request},
         routing::get,
-        Router,
     };
     use edgeshield_common::AlertStore;
     use edgeshield_storage::memory::MemoryStore;
@@ -338,8 +344,8 @@ mod tests {
 
     fn test_app() -> Router {
         let store = Arc::new(MemoryStore::new()) as Arc<dyn DeviceStore>;
-        let alert_store = Arc::new(edgeshield_rules::store::InMemoryAlertStore::new())
-            as Arc<dyn AlertStore>;
+        let alert_store =
+            Arc::new(edgeshield_rules::store::InMemoryAlertStore::new()) as Arc<dyn AlertStore>;
 
         // Add a test device
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();

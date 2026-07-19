@@ -41,7 +41,7 @@
 use std::sync::Mutex;
 
 use mac_address::MacAddress;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tracing::{info, trace};
 
 use edgeshield_common::{Device, Protocol, StorageError, Timestamp};
@@ -88,8 +88,9 @@ impl SqliteStore {
                 vendor TEXT,
                 dhcp_vendor_class TEXT,
                 protocol_stats TEXT NOT NULL DEFAULT '{}'
-            );"
-        ).map_err(|e| StorageError::Internal(format!("failed to create schema: {}", e)))?;
+            );",
+        )
+        .map_err(|e| StorageError::Internal(format!("failed to create schema: {}", e)))?;
 
         // Migrations: add columns introduced after the initial schema.
         // `ALTER TABLE ADD COLUMN` is idempotent-safe via the PRAGMA
@@ -98,7 +99,9 @@ impl SqliteStore {
         Self::migrate(&conn)?;
 
         info!(path = %path, "SQLite store opened");
-        Ok(Some(Self { conn: Mutex::new(conn) }))
+        Ok(Some(Self {
+            conn: Mutex::new(conn),
+        }))
     }
 
     /// Run additive schema migrations. Each `ALTER TABLE ADD COLUMN`
@@ -108,7 +111,12 @@ impl SqliteStore {
         // Phase 4: DHCP vendor class identifier.
         Self::add_column_if_missing(conn, "devices", "dhcp_vendor_class", "TEXT")?;
         // Phase 4: per-protocol packet statistics (JSON map).
-        Self::add_column_if_missing(conn, "devices", "protocol_stats", "TEXT NOT NULL DEFAULT '{}'")?;
+        Self::add_column_if_missing(
+            conn,
+            "devices",
+            "protocol_stats",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )?;
         Ok(())
     }
 
@@ -161,26 +169,28 @@ impl SqliteStore {
     /// Deserialize a JSON string back to a set of protocols.
     fn protocols_from_json(s: &str) -> std::collections::BTreeSet<Protocol> {
         let v: Vec<String> = serde_json::from_str(s).unwrap_or_default();
-        v.iter().filter_map(|p| match p.as_str() {
-            "ARP" => Some(Protocol::Arp),
-            "IPv4" => Some(Protocol::Ipv4),
-            "ICMP" => Some(Protocol::Icmp),
-            "TCP" => Some(Protocol::Tcp),
-            "UDP" => Some(Protocol::Udp),
-            "DNS" => Some(Protocol::Dns),
-            "DHCP" => Some(Protocol::Dhcp),
-            "HTTP" => Some(Protocol::Http),
-            "HTTPS" => Some(Protocol::Https),
-            "mDNS" => Some(Protocol::Mdns),
-            "NTP" => Some(Protocol::Ntp),
-            _ => {
-                if let Some(n) = p.strip_prefix("UNKNOWN(").and_then(|s| s.strip_suffix(')')) {
-                    n.parse().ok().map(Protocol::Other)
-                } else {
-                    None
+        v.iter()
+            .filter_map(|p| match p.as_str() {
+                "ARP" => Some(Protocol::Arp),
+                "IPv4" => Some(Protocol::Ipv4),
+                "ICMP" => Some(Protocol::Icmp),
+                "TCP" => Some(Protocol::Tcp),
+                "UDP" => Some(Protocol::Udp),
+                "DNS" => Some(Protocol::Dns),
+                "DHCP" => Some(Protocol::Dhcp),
+                "HTTP" => Some(Protocol::Http),
+                "HTTPS" => Some(Protocol::Https),
+                "mDNS" => Some(Protocol::Mdns),
+                "NTP" => Some(Protocol::Ntp),
+                _ => {
+                    if let Some(n) = p.strip_prefix("UNKNOWN(").and_then(|s| s.strip_suffix(')')) {
+                        n.parse().ok().map(Protocol::Other)
+                    } else {
+                        None
+                    }
                 }
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Serialize per-protocol packet counts to a JSON object for storage.
@@ -188,10 +198,7 @@ impl SqliteStore {
     fn protocol_stats_to_json(stats: &std::collections::BTreeMap<Protocol, u64>) -> String {
         // Use a Vec of (String, u64) to preserve a stable key order
         // independent of the Protocol enum's Ord derivation.
-        let v: Vec<(String, u64)> = stats
-            .iter()
-            .map(|(p, c)| (p.to_string(), *c))
-            .collect();
+        let v: Vec<(String, u64)> = stats.iter().map(|(p, c)| (p.to_string(), *c)).collect();
         serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string())
     }
 
@@ -244,13 +251,16 @@ impl SqliteStore {
         let dhcp_vendor_class: Option<String> = row.get(10).unwrap_or(None);
         let protocol_stats_str: String = row.get(11).unwrap_or_else(|_| "{}".to_string());
 
-        let mac = mac_str.parse::<MacAddress>()
+        let mac = mac_str
+            .parse::<MacAddress>()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
-        let first_seen: Timestamp = first_seen_str.parse::<chrono::DateTime<chrono::Utc>>()
+        let first_seen: Timestamp = first_seen_str
+            .parse::<chrono::DateTime<chrono::Utc>>()
             .map(Timestamp::from_datetime)
             .unwrap_or_else(|_| Timestamp::now());
-        let last_seen: Timestamp = last_seen_str.parse::<chrono::DateTime<chrono::Utc>>()
+        let last_seen: Timestamp = last_seen_str
+            .parse::<chrono::DateTime<chrono::Utc>>()
             .map(Timestamp::from_datetime)
             .unwrap_or_else(|_| Timestamp::now());
 
@@ -274,18 +284,23 @@ impl SqliteStore {
 impl DeviceStore for SqliteStore {
     fn get(&self, mac: &MacAddress) -> Result<Option<Device>, StorageError> {
         trace!(%mac, "sqlite store: get");
-        let conn = self.conn.lock().map_err(|e| {
-            StorageError::Internal(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
 
         let mut stmt = conn
             .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices WHERE mac = ?1")
             .map_err(|e| StorageError::Internal(format!("query prepare failed: {}", e)))?;
 
-        let mut rows = stmt.query(params![mac.to_string()])
+        let mut rows = stmt
+            .query(params![mac.to_string()])
             .map_err(|e| StorageError::Internal(format!("query failed: {}", e)))?;
 
-        match rows.next().map_err(|e| StorageError::Internal(format!("row fetch failed: {}", e)))? {
+        match rows
+            .next()
+            .map_err(|e| StorageError::Internal(format!("row fetch failed: {}", e)))?
+        {
             Some(row) => Ok(Some(Self::row_to_device(row).map_err(|e| {
                 StorageError::Internal(format!("row parse failed: {}", e))
             })?)),
@@ -295,9 +310,10 @@ impl DeviceStore for SqliteStore {
 
     fn upsert(&self, device: Device) -> Result<(), StorageError> {
         trace!(mac = %device.mac, "sqlite store: upsert");
-        let conn = self.conn.lock().map_err(|e| {
-            StorageError::Internal(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
 
         conn.execute(
             "INSERT INTO devices (mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats)
@@ -334,9 +350,10 @@ impl DeviceStore for SqliteStore {
 
     fn list(&self) -> Result<Vec<Device>, StorageError> {
         trace!("sqlite store: list");
-        let conn = self.conn.lock().map_err(|e| {
-            StorageError::Internal(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
 
         let mut stmt = conn
             .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices ORDER BY mac")
@@ -347,18 +364,18 @@ impl DeviceStore for SqliteStore {
 
         let mut devices = Vec::new();
         for row in rows {
-            devices.push(row.map_err(|e| {
-                StorageError::Internal(format!("row fetch failed: {}", e))
-            })?);
+            devices
+                .push(row.map_err(|e| StorageError::Internal(format!("row fetch failed: {}", e)))?);
         }
 
         Ok(devices)
     }
 
     fn count(&self) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().map_err(|e| {
-            StorageError::Internal(format!("mutex poisoned: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StorageError::Internal(format!("mutex poisoned: {}", e)))?;
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM devices", [], |row| row.get(0))
@@ -526,7 +543,10 @@ mod tests {
         store.upsert(device.clone()).unwrap();
         let retrieved = store.get(&mac).unwrap().unwrap();
 
-        assert_eq!(retrieved.dhcp_vendor_class.as_deref(), Some("android-dhcp-13"));
+        assert_eq!(
+            retrieved.dhcp_vendor_class.as_deref(),
+            Some("android-dhcp-13")
+        );
         assert_eq!(retrieved.protocol_stats.get(&Protocol::Tcp), Some(&2));
         assert_eq!(retrieved.protocol_stats.get(&Protocol::Mdns), Some(&1));
     }

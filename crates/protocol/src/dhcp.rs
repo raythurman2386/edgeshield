@@ -73,8 +73,7 @@ pub fn parse_dhcp(payload: &[u8]) -> Option<DhcpInfo> {
     }
 
     // Verify magic cookie
-    if payload[240] != 0x63 || payload[241] != 0x82
-        || payload[242] != 0x53 || payload[243] != 0x63
+    if payload[240] != 0x63 || payload[241] != 0x82 || payload[242] != 0x53 || payload[243] != 0x63
     {
         trace!("DHCP magic cookie not found");
         return None;

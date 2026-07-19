@@ -33,16 +33,16 @@
 use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::mpsc;
-use tracing::{error, info, span, Level};
+use tracing::{Level, error, info, span};
 
 use edgeshield_api::api;
 use edgeshield_config::config::Config;
 use edgeshield_discovery::discovery::{DiscoveryEngine, DiscoveryEvent};
-use edgeshield_notify::{Notifier, EmailNotifier, MqttNotifier, NtfyNotifier, WebhookNotifier};
+use edgeshield_notify::{EmailNotifier, MqttNotifier, Notifier, NtfyNotifier, WebhookNotifier};
 use edgeshield_packet::capture::CaptureSession;
 use edgeshield_rules::store::InMemoryAlertStore;
-use edgeshield_storage::SqliteAlertStore;
 use edgeshield_rules::{Rule, RuleCondition, RuleEngine};
+use edgeshield_storage::SqliteAlertStore;
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
 use edgeshield_storage::store::DeviceStore;
@@ -86,13 +86,11 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     let mut rules: Vec<Rule> = config
         .rules
         .iter()
-        .filter_map(|rc| {
-            match Rule::try_from(rc.clone()) {
-                Ok(r) => Some(r),
-                Err(e) => {
-                    error!(rule = %rc.name, error = %e, "skipping invalid rule");
-                    None
-                }
+        .filter_map(|rc| match Rule::try_from(rc.clone()) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                error!(rule = %rc.name, error = %e, "skipping invalid rule");
+                None
             }
         })
         .collect();
@@ -130,12 +128,7 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     let (alert_tx, alert_rx) = mpsc::channel::<edgeshield_common::Alert>(256);
 
     // 8. Start the rule engine (owns the discovery event receiver)
-    let rule_engine = RuleEngine::new(
-        rules,
-        event_rx,
-        alert_tx,
-        alert_store.clone(),
-    );
+    let rule_engine = RuleEngine::new(rules, event_rx, alert_tx, alert_store.clone());
     let rule_engine_handle = tokio::spawn(async move {
         rule_engine.run().await;
     });
@@ -182,10 +175,7 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         drop(alert_rx);
         None
     } else {
-        Some(edgeshield_notify::fanout::spawn_fanout(
-            alert_rx,
-            notifiers,
-        ))
+        Some(edgeshield_notify::fanout::spawn_fanout(alert_rx, notifiers))
     };
 
     // 11. Start the offline scanner (if configured)
@@ -229,9 +219,8 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     info!("EdgeShield running. Press Ctrl+C to stop.");
 
     // Set up SIGTERM handler (Unix only)
-    let mut term_signal = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::terminate(),
-    )?;
+    let mut term_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
     tokio::select! {
         _ = signal::ctrl_c() => {

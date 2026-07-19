@@ -193,7 +193,10 @@ impl RuleEngine {
     }
 
     /// Send an alert to the notifier fanout.
-    async fn fire_alert(&self, alert: Alert) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn fire_alert(
+        &self,
+        alert: Alert,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             rule = %alert.rule_name,
             mac = %alert.mac,
@@ -230,7 +233,10 @@ fn evaluate_rule(
                 && device
                     .vendor
                     .as_deref()
-                    .map(|v| v.to_ascii_lowercase().contains(&vendor_filter.to_ascii_lowercase()))
+                    .map(|v| {
+                        v.to_ascii_lowercase()
+                            .contains(&vendor_filter.to_ascii_lowercase())
+                    })
                     .unwrap_or(false)
         }
         RuleCondition::NewDeviceByMacPrefix(prefix) => {
@@ -294,11 +300,7 @@ fn mac_matches_prefix(mac: &MacAddress, prefix: &str) -> bool {
 
 /// Build a human-readable alert message from the rule name, device,
 /// and event type.
-fn build_message(
-    rule_name: &str,
-    device: &Device,
-    event_type: &AlertEventType,
-) -> String {
+fn build_message(rule_name: &str, device: &Device, event_type: &AlertEventType) -> String {
     let _ = rule_name; // available for future templating.
     let name = device
         .hostname
@@ -368,7 +370,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device();
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceDiscovered(device))
             .await
@@ -392,7 +396,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device();
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceDiscovered(device))
             .await
@@ -415,7 +421,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device(); // vendor = "TP-Link Technologies"
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceDiscovered(device))
             .await
@@ -438,7 +446,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device(); // vendor = "TP-Link Technologies"
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceDiscovered(device))
             .await
@@ -460,7 +470,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device(); // mac = 00:11:22:33:44:55
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceDiscovered(device))
             .await
@@ -475,14 +487,18 @@ mod tests {
         let rule = Rule::new(
             "offline-30min".to_string(),
             true,
-            RuleCondition::DeviceOffline { after_seconds: 1800 },
+            RuleCondition::DeviceOffline {
+                after_seconds: 1800,
+            },
             Severity::Warning,
             0,
         );
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device();
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceOffline(device))
             .await
@@ -504,7 +520,9 @@ mod tests {
         );
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
 
         // First event fires.
         let device = sample_device();
@@ -537,13 +555,10 @@ mod tests {
             Severity::Info,
             0,
         );
-        let engine = RuleEngine::new(
-            vec![rule],
-            event_rx,
-            alert_tx,
-            alert_store.clone(),
-        );
-        tokio::spawn(async move { engine.run().await; });
+        let engine = RuleEngine::new(vec![rule], event_rx, alert_tx, alert_store.clone());
+        tokio::spawn(async move {
+            engine.run().await;
+        });
 
         let device = sample_device();
         event_tx
@@ -575,7 +590,9 @@ mod tests {
         let (engine, event_tx, mut alert_rx) = setup_engine(vec![rule]);
         let device = sample_device();
 
-        tokio::spawn(async move { engine.run().await; });
+        tokio::spawn(async move {
+            engine.run().await;
+        });
         event_tx
             .send(DiscoveryEvent::DeviceUpdated(device))
             .await

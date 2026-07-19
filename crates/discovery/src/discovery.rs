@@ -23,7 +23,7 @@
 use mac_address::MacAddress;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, span, trace, warn, Level};
+use tracing::{Level, info, span, trace, warn};
 
 use edgeshield_common::{Device, Protocol};
 use edgeshield_oui;
@@ -62,10 +62,7 @@ pub struct DiscoveryEngine {
 
 impl DiscoveryEngine {
     /// Create a new discovery engine.
-    pub fn new(
-        store: Arc<dyn DeviceStore>,
-        event_tx: mpsc::Sender<DiscoveryEvent>,
-    ) -> Self {
+    pub fn new(store: Arc<dyn DeviceStore>, event_tx: mpsc::Sender<DiscoveryEvent>) -> Self {
         Self { store, event_tx }
     }
 
@@ -179,7 +176,9 @@ impl DiscoveryEngine {
             device.record_sent(packet_len, protocol.clone());
 
             // Set hostname from DHCP if available
-            if let Some(ref hostname) = dhcp_hostname && device.hostname.is_none() {
+            if let Some(ref hostname) = dhcp_hostname
+                && device.hostname.is_none()
+            {
                 device.hostname = Some(hostname.clone());
                 info!(mac = %src_mac, hostname, "hostname discovered via DHCP");
             }
@@ -187,7 +186,9 @@ impl DiscoveryEngine {
             // Fall back to mDNS hostname if DHCP didn't provide one.
             // mDNS names are often richer (e.g., "living-room-apple-tv.local")
             // but DHCP is authoritative when present.
-            if let Some(ref hostname) = mdns_hostname && device.hostname.is_none() {
+            if let Some(ref hostname) = mdns_hostname
+                && device.hostname.is_none()
+            {
                 device.hostname = Some(hostname.clone());
                 info!(mac = %src_mac, hostname, "hostname discovered via mDNS");
             }
@@ -196,7 +197,9 @@ impl DiscoveryEngine {
             // present and not already set. This is the client's
             // self-reported vendor class — distinct from the OUI
             // vendor which comes from the MAC registry.
-            if let Some(ref vc) = dhcp_vendor_class && device.dhcp_vendor_class.is_none() {
+            if let Some(ref vc) = dhcp_vendor_class
+                && device.dhcp_vendor_class.is_none()
+            {
                 device.dhcp_vendor_class = Some(vc.clone());
                 info!(mac = %src_mac, vendor_class = %vc, "DHCP vendor class discovered");
             }
@@ -210,9 +213,13 @@ impl DiscoveryEngine {
 
             if is_new_src {
                 info!(mac = %src_mac, protocol = %protocol, "new device discovered");
-                let _ = self.event_tx.try_send(DiscoveryEvent::DeviceDiscovered(device));
+                let _ = self
+                    .event_tx
+                    .try_send(DiscoveryEvent::DeviceDiscovered(device));
             } else {
-                let _ = self.event_tx.try_send(DiscoveryEvent::DeviceUpdated(device));
+                let _ = self
+                    .event_tx
+                    .try_send(DiscoveryEvent::DeviceUpdated(device));
             }
         }
 
@@ -243,9 +250,13 @@ impl DiscoveryEngine {
 
             if is_new_dst {
                 info!(mac = %dst_mac, protocol = %protocol, "new device discovered");
-                let _ = self.event_tx.try_send(DiscoveryEvent::DeviceDiscovered(device));
+                let _ = self
+                    .event_tx
+                    .try_send(DiscoveryEvent::DeviceDiscovered(device));
             } else {
-                let _ = self.event_tx.try_send(DiscoveryEvent::DeviceUpdated(device));
+                let _ = self
+                    .event_tx
+                    .try_send(DiscoveryEvent::DeviceUpdated(device));
             }
         }
 
@@ -253,7 +264,8 @@ impl DiscoveryEngine {
     }
 
     /// Get a reference to the device store.
-    #[must_use] pub fn store(&self) -> &Arc<dyn DeviceStore> {
+    #[must_use]
+    pub fn store(&self) -> &Arc<dyn DeviceStore> {
         &self.store
     }
 }

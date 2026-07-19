@@ -82,8 +82,10 @@ where
 {
     let dt: DateTime<Utc> = Deserialize::deserialize(deserializer)?;
     let ms = dt.timestamp_millis();
-    Ok(DateTime::from_timestamp_millis(ms)
-        .expect("timestamp_millis out of range after truncation"))
+    Ok(
+        DateTime::from_timestamp_millis(ms)
+            .expect("timestamp_millis out of range after truncation"),
+    )
 }
 
 #[cfg(test)]

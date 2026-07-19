@@ -71,7 +71,8 @@ fn acquire_pid_file() -> Result<(), anyhow::Error> {
         anyhow::bail!(
             "EdgeShield is already running (PID {}). \
              If this is incorrect, remove {} and try again.",
-            pid, PID_FILE
+            pid,
+            PID_FILE
         );
     }
 
@@ -103,7 +104,9 @@ fn load_config(path: &str) -> Result<edgeshield_config::config::Config, anyhow::
     ];
 
     for fb in &fallbacks {
-        if fb != &path && let Ok(cfg) = edgeshield_config::config::Config::from_file(fb) {
+        if fb != &path
+            && let Ok(cfg) = edgeshield_config::config::Config::from_file(fb)
+        {
             eprintln!("info: loaded config from fallback path: {fb}");
             return Ok(cfg);
         }
@@ -114,7 +117,8 @@ fn load_config(path: &str) -> Result<edgeshield_config::config::Config, anyhow::
 
 /// Print a bash completion script to stdout.
 fn print_bash_completion() {
-    println!(r#"# EdgeShield bash completion
+    println!(
+        r#"# EdgeShield bash completion
 _edgeshield() {{
     local cur prev words cword
     _init_completion || return
@@ -137,12 +141,14 @@ _edgeshield() {{
             ;;
     esac
 }} && complete -F _edgeshield edgeshield
-"#);
+"#
+    );
 }
 
 /// Print a zsh completion script to stdout.
 fn print_zsh_completion() {
-    println!(r#"#compdef edgeshield
+    println!(
+        r#"#compdef edgeshield
 # EdgeShield zsh completion
 _edgeshield() {{
     local -a subcommands
@@ -172,7 +178,8 @@ _edgeshield() {{
 }}
 
 _edgeshield
-"#);
+"#
+    );
 }
 
 /// Parse CLI arguments and run the appropriate command.

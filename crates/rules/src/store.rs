@@ -91,9 +91,7 @@ impl AlertStore for InMemoryAlertStore {
             alert.acknowledged = true;
             Ok(())
         } else {
-            Err(StorageError::Internal(format!(
-                "alert {id} not found"
-            )))
+            Err(StorageError::Internal(format!("alert {id} not found")))
         }
     }
 
@@ -102,17 +100,10 @@ impl AlertStore for InMemoryAlertStore {
         Ok(())
     }
 
-    fn is_acknowledged(
-        &self,
-        rule_name: &str,
-        mac: &MacAddress,
-    ) -> Result<bool, StorageError> {
-        Ok(self
-            .alerts
-            .iter()
-            .any(|r| r.value().rule_name == rule_name
-                && r.value().mac == *mac
-                && r.value().acknowledged))
+    fn is_acknowledged(&self, rule_name: &str, mac: &MacAddress) -> Result<bool, StorageError> {
+        Ok(self.alerts.iter().any(|r| {
+            r.value().rule_name == rule_name && r.value().mac == *mac && r.value().acknowledged
+        }))
     }
 
     fn count_alerts(&self) -> Result<usize, StorageError> {

@@ -120,11 +120,7 @@ impl MqttNotifier {
 
     /// Build `rumqttc::MqttOptions` from our config.
     fn build_mqtt_options(config: &MqttConfig) -> MqttOptions {
-        let mut opts = MqttOptions::new(
-            config.client_id.clone(),
-            config.host.clone(),
-            config.port,
-        );
+        let mut opts = MqttOptions::new(config.client_id.clone(), config.host.clone(), config.port);
         opts.set_clean_session(true);
         if let (Some(user), Some(pass)) = (&config.username, &config.password) {
             opts.set_credentials(user, pass);

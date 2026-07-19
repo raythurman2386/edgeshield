@@ -35,11 +35,7 @@ pub trait AlertStore: Send + Sync {
     /// Check if there's an acknowledged alert for the given
     /// rule/device combination. Used by the rule engine for
     /// acknowledgment-based suppression.
-    fn is_acknowledged(
-        &self,
-        rule_name: &str,
-        mac: &MacAddress,
-    ) -> Result<bool, StorageError>;
+    fn is_acknowledged(&self, rule_name: &str, mac: &MacAddress) -> Result<bool, StorageError>;
 
     /// Get the total alert count.
     fn count_alerts(&self) -> Result<usize, StorageError>;

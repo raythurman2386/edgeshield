@@ -18,7 +18,7 @@
 
 use edgeshield_common::Protocol;
 use edgeshield_packet::decode::{DecodedPacket, TransportHeader};
-use tracing::{trace, Level};
+use tracing::{Level, trace};
 
 /// Well-known UDP ports for protocol classification.
 mod udp_ports {
@@ -69,9 +69,7 @@ pub fn classify(packet: &DecodedPacket<'_>) -> Protocol {
             TransportHeader::Tcp(tcp) => {
                 classify_tcp(tcp.source_port, tcp.destination_port, packet.payload)
             }
-            TransportHeader::Udp(udp) => {
-                classify_udp(udp.source_port, udp.destination_port)
-            }
+            TransportHeader::Udp(udp) => classify_udp(udp.source_port, udp.destination_port),
             TransportHeader::Icmp(_) => {
                 trace!("classified as ICMP");
                 Protocol::Icmp
@@ -135,7 +133,14 @@ fn is_http_banner(payload: &[u8]) -> bool {
 
     // Request methods (with trailing space).
     const METHODS: &[&[u8]] = &[
-        b"GET ", b"POST ", b"PUT ", b"DELETE ", b"HEAD ", b"OPTIONS ", b"PATCH ", b"TRACE ",
+        b"GET ",
+        b"POST ",
+        b"PUT ",
+        b"DELETE ",
+        b"HEAD ",
+        b"OPTIONS ",
+        b"PATCH ",
+        b"TRACE ",
         b"CONNECT ",
     ];
     for method in METHODS {
@@ -159,8 +164,10 @@ fn classify_udp(src_port: u16, dst_port: u16) -> Protocol {
         trace!("classified as DNS (UDP)");
         return Protocol::Dns;
     }
-    if src_port == udp_ports::DHCP_SERVER || dst_port == udp_ports::DHCP_SERVER
-        || src_port == udp_ports::DHCP_CLIENT || dst_port == udp_ports::DHCP_CLIENT
+    if src_port == udp_ports::DHCP_SERVER
+        || dst_port == udp_ports::DHCP_SERVER
+        || src_port == udp_ports::DHCP_CLIENT
+        || dst_port == udp_ports::DHCP_CLIENT
     {
         trace!("classified as DHCP");
         return Protocol::Dhcp;

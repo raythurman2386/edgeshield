@@ -121,10 +121,7 @@ pub fn decode_packet(buf: &PacketBuf) -> Result<DecodedPacket<'_>, PacketError> 
     let (ipv4, transport, payload) = if ethernet.ethertype == EtherTypes::Ipv4.0 {
         let ip_header = decode_ipv4(&buf.raw[14..])?;
         let transport_offset = 14 + ip_header.header_length as usize;
-        let (transport, payload_end) = decode_transport(
-            &ip_header,
-            &buf.raw[transport_offset..],
-        )?;
+        let (transport, payload_end) = decode_transport(&ip_header, &buf.raw[transport_offset..])?;
         let payload = &buf.raw[transport_offset + payload_end..];
         (Some(ip_header), transport, payload)
     } else {

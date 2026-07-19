@@ -32,7 +32,7 @@
 
 use edgeshield_common::Alert;
 use edgeshield_config::config::NtfyConfig;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tracing::{info, warn};
 
 use crate::fanout::{Notifier, NotifierError};
@@ -121,7 +121,10 @@ impl Notifier for NtfyNotifier {
             .clone()
             .or_else(|| device.vendor.clone())
             .unwrap_or_else(|| device.mac.to_string());
-        let title = format!("[{}] {}: {name} ({})", alert.severity, alert.message, device.mac);
+        let title = format!(
+            "[{}] {}: {name} ({})",
+            alert.severity, alert.message, device.mac
+        );
 
         let mut headers = self.base_headers.clone();
         if let Ok(value) = HeaderValue::from_str(&title) {
@@ -190,7 +193,10 @@ mod tests {
             "Bearer tok_abc123"
         );
         assert_eq!(notifier.base_headers.get("Priority").unwrap(), "2");
-        assert_eq!(notifier.base_headers.get("Tags").unwrap(), "warning,desktop");
+        assert_eq!(
+            notifier.base_headers.get("Tags").unwrap(),
+            "warning,desktop"
+        );
     }
 
     #[test]

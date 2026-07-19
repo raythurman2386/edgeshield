@@ -295,9 +295,15 @@ pub enum RuleConditionConfig {
     /// Simple string conditions: "new_device", "protocol_change".
     Simple(String),
     /// Table conditions with parameters.
-    NewDeviceByVendor { new_device_by_vendor: String },
-    NewDeviceByMacPrefix { new_device_by_mac_prefix: String },
-    DeviceOffline { device_offline: DeviceOfflineCondition },
+    NewDeviceByVendor {
+        new_device_by_vendor: String,
+    },
+    NewDeviceByMacPrefix {
+        new_device_by_mac_prefix: String,
+    },
+    DeviceOffline {
+        device_offline: DeviceOfflineCondition,
+    },
 }
 
 /// Parameters for the `device_offline` condition.
@@ -375,8 +381,8 @@ impl FromStr for Config {
     type Err = crate::ConfigError;
 
     fn from_str(content: &str) -> Result<Self, Self::Err> {
-        let mut config: Config = toml::from_str(content)
-            .map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
+        let mut config: Config =
+            toml::from_str(content).map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
 
         if config.interface.trim().is_empty() {
             return Err(crate::ConfigError::EmptyInterface(config.interface));
@@ -418,8 +424,8 @@ impl FromStr for Config {
                 return Err(crate::ConfigError::EmptyRuleName);
             }
             // Validate severity string (parse to check, discard result).
-            let _ = Severity::from_str(&rule.severity)
-                .map_err(crate::ConfigError::InvalidSeverity)?;
+            let _ =
+                Severity::from_str(&rule.severity).map_err(crate::ConfigError::InvalidSeverity)?;
         }
 
         Ok(config)
@@ -429,11 +435,10 @@ impl FromStr for Config {
 impl Config {
     /// Load configuration from a TOML file path.
     pub fn from_file(path: &str) -> Result<Self, crate::ConfigError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::ConfigError::Read {
-                path: path.to_string(),
-                source: Box::new(e),
-            })?;
+        let content = std::fs::read_to_string(path).map_err(|e| crate::ConfigError::Read {
+            path: path.to_string(),
+            source: Box::new(e),
+        })?;
         content.parse()
     }
 }
@@ -553,10 +558,7 @@ mod tests {
             host = ""
         "#;
         let result: Result<Config, _> = toml.parse();
-        assert!(matches!(
-            result,
-            Err(crate::ConfigError::EmptyMqttHost)
-        ));
+        assert!(matches!(result, Err(crate::ConfigError::EmptyMqttHost)));
     }
 
     #[test]
@@ -568,10 +570,7 @@ mod tests {
             qos = 3
         "#;
         let result: Result<Config, _> = toml.parse();
-        assert!(matches!(
-            result,
-            Err(crate::ConfigError::InvalidMqttQos(3))
-        ));
+        assert!(matches!(result, Err(crate::ConfigError::InvalidMqttQos(3))));
     }
 
     #[test]
@@ -714,7 +713,9 @@ mod tests {
         "#;
         let config: Config = toml.parse().unwrap();
         match &config.rules[0].condition {
-            RuleConditionConfig::NewDeviceByVendor { new_device_by_vendor } => {
+            RuleConditionConfig::NewDeviceByVendor {
+                new_device_by_vendor,
+            } => {
                 assert_eq!(new_device_by_vendor, "TP-Link");
             }
             other => panic!("expected NewDeviceByVendor, got {other:?}"),
@@ -756,7 +757,10 @@ mod tests {
             severity = "urgent"
         "#;
         let result: Result<Config, _> = toml.parse();
-        assert!(matches!(result, Err(crate::ConfigError::InvalidSeverity(_))));
+        assert!(matches!(
+            result,
+            Err(crate::ConfigError::InvalidSeverity(_))
+        ));
     }
 
     #[test]

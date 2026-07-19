@@ -173,10 +173,7 @@ mod tests {
         assert_eq!(Severity::from_str("warning").unwrap(), Severity::Warning);
         assert_eq!(Severity::from_str("warn").unwrap(), Severity::Warning);
         assert_eq!(Severity::from_str("critical").unwrap(), Severity::Critical);
-        assert_eq!(
-            Severity::from_str("CRITICAL").unwrap(),
-            Severity::Critical
-        );
+        assert_eq!(Severity::from_str("CRITICAL").unwrap(), Severity::Critical);
     }
 
     #[test]

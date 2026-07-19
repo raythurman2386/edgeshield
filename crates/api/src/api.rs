@@ -48,10 +48,16 @@ pub async fn serve(
         .route("/devices", axum::routing::get(routes::list_devices))
         .route("/devices/:mac", axum::routing::get(routes::get_device))
         .route("/metrics", axum::routing::get(routes::metrics))
-        .route("/metrics/prometheus", axum::routing::get(routes::metrics_prometheus))
+        .route(
+            "/metrics/prometheus",
+            axum::routing::get(routes::metrics_prometheus),
+        )
         .route("/alerts", axum::routing::get(routes::list_alerts))
         .route("/alerts/:id", axum::routing::get(routes::get_alert))
-        .route("/alerts/:id/acknowledge", axum::routing::post(routes::acknowledge_alert))
+        .route(
+            "/alerts/:id/acknowledge",
+            axum::routing::post(routes::acknowledge_alert),
+        )
         .route("/alerts/:id", axum::routing::delete(routes::delete_alert))
         .with_state(state);
 

@@ -29,9 +29,11 @@
 
 use std::sync::Mutex;
 
-use edgeshield_common::{Alert, AlertEventType, AlertFilter, AlertId, AlertStore, Device, Severity, StorageError};
+use edgeshield_common::{
+    Alert, AlertEventType, AlertFilter, AlertId, AlertStore, Device, Severity, StorageError,
+};
 use mac_address::MacAddress;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use tracing::{info, trace};
 
 /// A SQLite-backed alert store.
@@ -78,7 +80,9 @@ impl SqliteAlertStore {
         .map_err(|e| StorageError::Internal(format!("failed to create alerts schema: {e}")))?;
 
         info!(path = %path, "SQLite alert store opened");
-        Ok(Some(Self { conn: Mutex::new(conn) }))
+        Ok(Some(Self {
+            conn: Mutex::new(conn),
+        }))
     }
 
     /// Convert a SQLite row to an Alert.
@@ -97,8 +101,12 @@ impl SqliteAlertStore {
             .parse::<MacAddress>()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
-        let severity: Severity = std::str::FromStr::from_str(&severity_str)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e))))?;
+        let severity: Severity = std::str::FromStr::from_str(&severity_str).map_err(|e| {
+            rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })?;
 
         let event_type = parse_event_type(&event_type_str);
 
@@ -219,9 +227,7 @@ impl AlertStore for SqliteAlertStore {
 
         let mut alerts = Vec::new();
         for row in rows {
-            alerts.push(row.map_err(|e| {
-                StorageError::Internal(format!("row parse failed: {e}"))
-            })?);
+            alerts.push(row.map_err(|e| StorageError::Internal(format!("row parse failed: {e}")))?);
         }
         Ok(alerts)
     }
@@ -248,10 +254,9 @@ impl AlertStore for SqliteAlertStore {
             .next()
             .map_err(|e| StorageError::Internal(format!("row fetch failed: {e}")))?
         {
-            Some(row) => Ok(Some(
-                Self::row_to_alert(row)
-                    .map_err(|e| StorageError::Internal(format!("row parse failed: {e}")))?,
-            )),
+            Some(row) => Ok(Some(Self::row_to_alert(row).map_err(|e| {
+                StorageError::Internal(format!("row parse failed: {e}"))
+            })?)),
             None => Ok(None),
         }
     }
@@ -271,9 +276,7 @@ impl AlertStore for SqliteAlertStore {
             .map_err(|e| StorageError::Internal(format!("acknowledge failed: {e}")))?;
 
         if affected == 0 {
-            return Err(StorageError::Internal(format!(
-                "alert {id} not found"
-            )));
+            return Err(StorageError::Internal(format!("alert {id} not found")));
         }
         Ok(())
     }
@@ -290,11 +293,7 @@ impl AlertStore for SqliteAlertStore {
         Ok(())
     }
 
-    fn is_acknowledged(
-        &self,
-        rule_name: &str,
-        mac: &MacAddress,
-    ) -> Result<bool, StorageError> {
+    fn is_acknowledged(&self, rule_name: &str, mac: &MacAddress) -> Result<bool, StorageError> {
         trace!(rule = rule_name, mac = %mac, "sqlite alert store: is_acknowledged");
         let conn = self
             .conn
@@ -461,8 +460,12 @@ mod tests {
     #[test]
     fn test_sqlite_alert_filter_by_rule_name() {
         let store = open_test_store();
-        store.insert_alert(&sample_alert("rule-a", "00:11:22:33:44:55")).unwrap();
-        store.insert_alert(&sample_alert("rule-b", "00:11:22:33:44:66")).unwrap();
+        store
+            .insert_alert(&sample_alert("rule-a", "00:11:22:33:44:55"))
+            .unwrap();
+        store
+            .insert_alert(&sample_alert("rule-b", "00:11:22:33:44:66"))
+            .unwrap();
 
         let filter = AlertFilter {
             rule_name: Some("rule-b".to_string()),

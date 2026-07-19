@@ -108,7 +108,8 @@ impl Device {
     /// Create a new device from a MAC address.
     ///
     /// This is the only constructor. All counters start at zero.
-    #[must_use] pub fn new(mac: MacAddress) -> Self {
+    #[must_use]
+    pub fn new(mac: MacAddress) -> Self {
         let now = Timestamp::now();
         Self {
             mac,

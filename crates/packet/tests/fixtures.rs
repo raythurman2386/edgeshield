@@ -84,19 +84,29 @@ fn test_fixture_tcp_syn() {
     let decoded = decode::decode_packet(&buf).expect("TCP SYN fixture should decode");
 
     // Ethernet
-    assert_eq!(decoded.ethernet.source, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-    assert_eq!(decoded.ethernet.destination, [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+    assert_eq!(
+        decoded.ethernet.source,
+        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]
+    );
+    assert_eq!(
+        decoded.ethernet.destination,
+        [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]
+    );
     assert_eq!(decoded.ethernet.ethertype, 0x0800); // IPv4
 
     // IPv4
-    let ip = decoded.ipv4.expect("TCP SYN fixture should have IPv4 header");
+    let ip = decoded
+        .ipv4
+        .expect("TCP SYN fixture should have IPv4 header");
     assert_eq!(ip.source, "192.168.1.10".parse::<IpAddr>().unwrap());
     assert_eq!(ip.destination, "93.184.216.34".parse::<IpAddr>().unwrap());
     assert_eq!(ip.protocol, 6); // TCP
     assert_eq!(ip.total_length, 60);
 
     // TCP
-    let transport = decoded.transport.expect("TCP SYN fixture should have transport header");
+    let transport = decoded
+        .transport
+        .expect("TCP SYN fixture should have transport header");
     match transport {
         TransportHeader::Tcp(tcp) => {
             assert_eq!(tcp.source_port, 54321);
@@ -121,7 +131,9 @@ fn test_fixture_dns_query() {
     assert_eq!(ip.protocol, 17); // UDP
 
     // UDP
-    let transport = decoded.transport.expect("DNS fixture should have transport header");
+    let transport = decoded
+        .transport
+        .expect("DNS fixture should have transport header");
     match transport {
         TransportHeader::Udp(udp) => {
             assert_eq!(udp.source_port, 54321);
@@ -137,13 +149,22 @@ fn test_fixture_arp_request() {
     let decoded = decode::decode_packet(&buf).expect("ARP fixture should decode");
 
     // Ethernet
-    assert_eq!(decoded.ethernet.source, [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-    assert_eq!(decoded.ethernet.destination, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    assert_eq!(
+        decoded.ethernet.source,
+        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]
+    );
+    assert_eq!(
+        decoded.ethernet.destination,
+        [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+    );
     assert_eq!(decoded.ethernet.ethertype, 0x0806); // ARP
 
     // No IP or transport for ARP
     assert!(decoded.ipv4.is_none(), "ARP should not have IPv4 header");
-    assert!(decoded.transport.is_none(), "ARP should not have transport header");
+    assert!(
+        decoded.transport.is_none(),
+        "ARP should not have transport header"
+    );
 }
 
 #[test]
@@ -161,7 +182,9 @@ fn test_fixture_icmp_echo() {
     assert_eq!(ip.protocol, 1); // ICMP
 
     // ICMP
-    let transport = decoded.transport.expect("ICMP fixture should have transport header");
+    let transport = decoded
+        .transport
+        .expect("ICMP fixture should have transport header");
     match transport {
         TransportHeader::Icmp(icmp) => {
             assert_eq!(icmp.icmp_type, 8); // Echo request
@@ -181,7 +204,12 @@ fn test_fixture_all_decode_without_panic() {
     ] {
         let buf = fixture_buf(hex);
         let result = decode::decode_packet(&buf);
-        assert!(result.is_ok(), "fixture '{}' should decode: {:?}", name, result.err());
+        assert!(
+            result.is_ok(),
+            "fixture '{}' should decode: {:?}",
+            name,
+            result.err()
+        );
     }
 }
 

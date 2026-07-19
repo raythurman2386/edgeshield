@@ -97,11 +97,13 @@ pub fn parse_mdns(payload: &[u8]) -> Option<MdnsInfo> {
         for _ in 0..section_count {
             let record = match parse_record(payload, offset) {
                 Some(r) => r,
-                None => return if info.hostname.is_some() || info.instance.is_some() {
-                    Some(info)
-                } else {
-                    None
-                },
+                None => {
+                    return if info.hostname.is_some() || info.instance.is_some() {
+                        Some(info)
+                    } else {
+                        None
+                    };
+                }
             };
             offset = record.next_offset;
 
@@ -151,8 +153,7 @@ fn parse_record(payload: &[u8], offset: usize) -> Option<ParsedRecord> {
         return None;
     }
     let record_type = u16::from_be_bytes([payload[name_end], payload[name_end + 1]]);
-    let rdlength =
-        u16::from_be_bytes([payload[name_end + 8], payload[name_end + 9]]) as usize;
+    let rdlength = u16::from_be_bytes([payload[name_end + 8], payload[name_end + 9]]) as usize;
     let rdata_start = name_end + 10;
     if rdata_start + rdlength > payload.len() {
         return None;
@@ -201,7 +202,11 @@ fn read_name(payload: &[u8], offset: usize) -> Option<(usize, Option<String>)> {
 
 /// Core name-reading logic. `collect` controls whether we build the
 /// name string (we always need to walk it to find the end).
-fn read_name_internal(payload: &[u8], mut offset: usize, collect: bool) -> Option<(usize, Option<String>)> {
+fn read_name_internal(
+    payload: &[u8],
+    mut offset: usize,
+    collect: bool,
+) -> Option<(usize, Option<String>)> {
     let mut labels: Vec<String> = Vec::new();
     let mut end_offset: Option<usize> = None;
     let mut jumps = 0u8;
@@ -359,7 +364,9 @@ mod tests {
 
         let mut buf = Vec::new();
         // Header
-        buf.extend_from_slice(&[0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]);
+        buf.extend_from_slice(&[
+            0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+        ]);
 
         // PTR record: owner = service_type, rdata = instance (uncompressed).
         let ptr_owner_start = buf.len();
@@ -402,7 +409,9 @@ mod tests {
     fn test_parse_mdns_question_only() {
         // A query (not a response) with one question and no answers.
         let mut buf = Vec::new();
-        buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        buf.extend_from_slice(&[
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]);
         encode_name(&mut buf, "_airplay._tcp.local");
         buf.extend_from_slice(&[0x00, 0x0C]); // type PTR
         buf.extend_from_slice(&[0x00, 0x01]); // class IN
@@ -414,7 +423,9 @@ mod tests {
     fn test_parse_mdns_srv_only() {
         // A response with only an SRV record (no PTR).
         let mut buf = Vec::new();
-        buf.extend_from_slice(&[0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        buf.extend_from_slice(&[
+            0x00, 0x00, 0x84, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ]);
         encode_name(&mut buf, "printer._ipp._tcp.local");
         buf.extend_from_slice(&RECORD_TYPE_SRV.to_be_bytes());
         buf.extend_from_slice(&[0x00, 0x01]);

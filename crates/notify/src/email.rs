@@ -6,10 +6,10 @@
 
 use edgeshield_common::Alert;
 use edgeshield_config::config::EmailConfig;
-use lettre::message::header::ContentType;
 use lettre::message::Message;
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::message::header::ContentType;
 use lettre::transport::smtp::AsyncSmtpTransport;
+use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncTransport, Tokio1Executor};
 use tracing::info;
 
@@ -25,10 +25,7 @@ pub struct EmailNotifier {
 impl EmailNotifier {
     /// Create a new email notifier.
     pub fn new(config: EmailConfig) -> Result<Self, NotifierError> {
-        let creds = Credentials::new(
-            config.username.clone(),
-            config.password.clone(),
-        );
+        let creds = Credentials::new(config.username.clone(), config.password.clone());
 
         // Use `starttls_relay` for STARTTLS (port 587, default) or
         // `relay` for implicit TLS (port 465). The `starttls` config
@@ -59,12 +56,17 @@ impl EmailNotifier {
         let body = format_alert_body(alert);
 
         Message::builder()
-            .from(self.config.from.parse().map_err(|e| {
-                NotifierError::Config(format!("invalid from address: {e}"))
-            })?)
-            .to(self.config.to.parse().map_err(|e| {
-                NotifierError::Config(format!("invalid to address: {e}"))
-            })?)
+            .from(
+                self.config
+                    .from
+                    .parse()
+                    .map_err(|e| NotifierError::Config(format!("invalid from address: {e}")))?,
+            )
+            .to(self
+                .config
+                .to
+                .parse()
+                .map_err(|e| NotifierError::Config(format!("invalid to address: {e}")))?)
             .subject(subject)
             .header(ContentType::TEXT_PLAIN)
             .body(body)

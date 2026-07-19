@@ -138,18 +138,39 @@ async fn test_pipeline_tcp_packet() {
 
     // Verify source device
     let src_mac_addr = MacAddress::new(src_mac);
-    let src_device = store.get(&src_mac_addr).unwrap().expect("source device should exist");
+    let src_device = store
+        .get(&src_mac_addr)
+        .unwrap()
+        .expect("source device should exist");
     assert_eq!(src_device.packet_count, 1, "source should have 1 packet");
     assert!(src_device.bytes_sent > 0, "source should have bytes sent");
-    assert!(src_device.protocols.contains(&Protocol::Tcp), "source should have TCP protocol");
-    assert!(src_device.ips.contains(&"192.168.1.10".parse().unwrap()), "source should have its IP");
+    assert!(
+        src_device.protocols.contains(&Protocol::Tcp),
+        "source should have TCP protocol"
+    );
+    assert!(
+        src_device.ips.contains(&"192.168.1.10".parse().unwrap()),
+        "source should have its IP"
+    );
 
     // Verify destination device
     let dst_mac_addr = MacAddress::new(dst_mac);
-    let dst_device = store.get(&dst_mac_addr).unwrap().expect("destination device should exist");
-    assert_eq!(dst_device.packet_count, 1, "destination should have 1 packet");
-    assert!(dst_device.bytes_received > 0, "destination should have bytes received");
-    assert!(dst_device.protocols.contains(&Protocol::Tcp), "destination should have TCP protocol");
+    let dst_device = store
+        .get(&dst_mac_addr)
+        .unwrap()
+        .expect("destination device should exist");
+    assert_eq!(
+        dst_device.packet_count, 1,
+        "destination should have 1 packet"
+    );
+    assert!(
+        dst_device.bytes_received > 0,
+        "destination should have bytes received"
+    );
+    assert!(
+        dst_device.protocols.contains(&Protocol::Tcp),
+        "destination should have TCP protocol"
+    );
 }
 
 #[tokio::test]
@@ -166,8 +187,14 @@ async fn test_pipeline_arp_packet() {
     engine.process_packet(buf).await;
 
     let mac_addr = MacAddress::new(src_mac);
-    let device = store.get(&mac_addr).unwrap().expect("ARP sender should be discovered");
-    assert!(device.protocols.contains(&Protocol::Arp), "ARP sender should have ARP protocol");
+    let device = store
+        .get(&mac_addr)
+        .unwrap()
+        .expect("ARP sender should be discovered");
+    assert!(
+        device.protocols.contains(&Protocol::Arp),
+        "ARP sender should have ARP protocol"
+    );
     assert_eq!(device.packet_count, 1);
 }
 
@@ -185,8 +212,14 @@ async fn test_pipeline_dns_packet() {
     engine.process_packet(buf).await;
 
     let mac_addr = MacAddress::new(src_mac);
-    let device = store.get(&mac_addr).unwrap().expect("DNS sender should be discovered");
-    assert!(device.protocols.contains(&Protocol::Dns), "DNS sender should have DNS protocol");
+    let device = store
+        .get(&mac_addr)
+        .unwrap()
+        .expect("DNS sender should be discovered");
+    assert!(
+        device.protocols.contains(&Protocol::Dns),
+        "DNS sender should have DNS protocol"
+    );
 }
 
 #[tokio::test]
@@ -208,7 +241,10 @@ async fn test_pipeline_multiple_packets_same_device() {
 
     let mac_addr = MacAddress::new(src_mac);
     let device = store.get(&mac_addr).unwrap().expect("device should exist");
-    assert_eq!(device.packet_count, 3, "device should have 3 packets after 3 sends");
+    assert_eq!(
+        device.packet_count, 3,
+        "device should have 3 packets after 3 sends"
+    );
 }
 
 #[tokio::test]
@@ -238,6 +274,10 @@ async fn test_pipeline_multiple_devices() {
     // Verify all 3 source MACs are present
     for (mac, _) in &devices {
         let addr = MacAddress::new(*mac);
-        assert!(store.get(&addr).unwrap().is_some(), "device {} should exist", addr);
+        assert!(
+            store.get(&addr).unwrap().is_some(),
+            "device {} should exist",
+            addr
+        );
     }
 }

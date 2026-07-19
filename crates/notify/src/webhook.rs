@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use edgeshield_common::Alert;
 use edgeshield_config::config::WebhookConfig;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use tracing::info;
 
 use crate::fanout::{Notifier, NotifierError};
@@ -136,7 +136,9 @@ mod tests {
     #[test]
     fn test_webhook_notifier_with_custom_headers() {
         let mut config = sample_config();
-        config.headers.insert("X-Custom".to_string(), "value".to_string());
+        config
+            .headers
+            .insert("X-Custom".to_string(), "value".to_string());
         let notifier = WebhookNotifier::new(config).unwrap();
         assert_eq!(notifier.headers.get("X-Custom").unwrap(), "value");
     }

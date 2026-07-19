@@ -43,17 +43,19 @@ fn convert_condition(config: &RuleConditionConfig) -> Result<RuleCondition, Stri
                 "unknown simple condition '{other}': expected new_device or protocol_change"
             )),
         },
-        RuleConditionConfig::NewDeviceByVendor { new_device_by_vendor } => {
-            Ok(RuleCondition::NewDeviceByVendor(new_device_by_vendor.clone()))
-        }
-        RuleConditionConfig::NewDeviceByMacPrefix { new_device_by_mac_prefix } => {
-            Ok(RuleCondition::NewDeviceByMacPrefix(new_device_by_mac_prefix.clone()))
-        }
-        RuleConditionConfig::DeviceOffline { device_offline } => Ok(
-            RuleCondition::DeviceOffline {
-                after_seconds: device_offline.after_seconds,
-            },
-        ),
+        RuleConditionConfig::NewDeviceByVendor {
+            new_device_by_vendor,
+        } => Ok(RuleCondition::NewDeviceByVendor(
+            new_device_by_vendor.clone(),
+        )),
+        RuleConditionConfig::NewDeviceByMacPrefix {
+            new_device_by_mac_prefix,
+        } => Ok(RuleCondition::NewDeviceByMacPrefix(
+            new_device_by_mac_prefix.clone(),
+        )),
+        RuleConditionConfig::DeviceOffline { device_offline } => Ok(RuleCondition::DeviceOffline {
+            after_seconds: device_offline.after_seconds,
+        }),
     }
 }
 
@@ -85,7 +87,9 @@ mod tests {
             name: "offline".to_string(),
             enabled: true,
             condition: RuleConditionConfig::DeviceOffline {
-                device_offline: DeviceOfflineCondition { after_seconds: 1800 },
+                device_offline: DeviceOfflineCondition {
+                    after_seconds: 1800,
+                },
             },
             severity: "warning".to_string(),
             cooldown_seconds: 0,
@@ -93,7 +97,9 @@ mod tests {
         let rule: Rule = config.try_into().unwrap();
         assert!(matches!(
             rule.condition,
-            RuleCondition::DeviceOffline { after_seconds: 1800 }
+            RuleCondition::DeviceOffline {
+                after_seconds: 1800
+            }
         ));
     }
 

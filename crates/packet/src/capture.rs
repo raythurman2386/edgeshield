@@ -25,7 +25,7 @@
 
 use pcap::{Capture, Device};
 use tokio::sync::mpsc;
-use tracing::{info, span, warn, Level};
+use tracing::{Level, info, span, warn};
 
 use edgeshield_common::PacketError;
 
@@ -113,10 +113,7 @@ impl CaptureSession {
     /// The thread reads packets in a loop and sends them over a bounded
     /// mpsc channel. Backpressure is handled by the channel — if the
     /// pipeline is slow, packets are dropped at the capture level.
-    pub fn start(
-        interface_name: &str,
-        channel_size: usize,
-    ) -> Result<Self, PacketError> {
+    pub fn start(interface_name: &str, channel_size: usize) -> Result<Self, PacketError> {
         let span = span!(Level::INFO, "capture", interface = %interface_name);
         let _guard = span.enter();
 
@@ -240,9 +237,9 @@ impl CaptureSession {
                 interface: interface_name.to_string(),
                 source: Box::new(e),
             })?
-            .promisc(false)       // CRITICAL: no promiscuous mode — avoids WiFi disruption
+            .promisc(false) // CRITICAL: no promiscuous mode — avoids WiFi disruption
             .immediate_mode(true) // Deliver packets immediately, no kernel buffering
-            .timeout(500)         // 500ms read timeout — allows checking stop signal
+            .timeout(500) // 500ms read timeout — allows checking stop signal
             .open()
             .map_err(|e| PacketError::CaptureOpen {
                 interface: interface_name.to_string(),
@@ -283,8 +280,8 @@ impl CaptureSession {
 fn linktype_to_header_len(linktype: pcap::Linktype) -> usize {
     match linktype.0 {
         1 => 14,   // EN10MB — Ethernet II
-        12 => 0,    // RAW — raw IP, no link-layer header
-        113 => 16,  // LINUX_SLL — Linux cooked capture (the `any` device)
+        12 => 0,   // RAW — raw IP, no link-layer header
+        113 => 16, // LINUX_SLL — Linux cooked capture (the `any` device)
         other => {
             warn!(
                 link_type = other,

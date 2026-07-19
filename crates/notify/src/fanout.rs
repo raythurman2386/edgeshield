@@ -63,12 +63,18 @@ impl NotifierFanout {
     /// Create a new fanout with the given notifiers.
     #[must_use]
     pub fn new(alert_rx: mpsc::Receiver<Alert>, notifiers: Vec<Arc<dyn Notifier>>) -> Self {
-        Self { alert_rx, notifiers }
+        Self {
+            alert_rx,
+            notifiers,
+        }
     }
 
     /// Run the fanout loop until the alert sender is dropped.
     pub async fn run(mut self) {
-        info!(notifier_count = self.notifiers.len(), "notifier fanout starting");
+        info!(
+            notifier_count = self.notifiers.len(),
+            "notifier fanout starting"
+        );
         while let Some(alert) = self.alert_rx.recv().await {
             for notifier in &self.notifiers {
                 if let Err(e) = notifier.deliver(&alert).await {
