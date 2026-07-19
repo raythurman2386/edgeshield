@@ -1,0 +1,21 @@
+[package]
+name = "edgeshield-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+edgeshield-config = { path = "../config" }
+edgeshield-telemetry = { path = "../telemetry" }
+edgeshield-packet = { path = "../packet" }
+edgeshield-protocol = { path = "../protocol" }
+edgeshield-discovery = { path = "../discovery" }
+edgeshield-storage = { path = "../storage" }
+edgeshield-api = { path = "../api" }
+
+[dev-dependencies]
+mac_address.workspace = true
+edgeshield-common = { path = "../common" }

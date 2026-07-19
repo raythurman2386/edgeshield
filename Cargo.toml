@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+    "crates/config",
+    "crates/telemetry",
+    "crates/packet",
+    "crates/protocol",
+    "crates/storage",
+    "crates/discovery",
+    "crates/api",
+    "crates/daemon",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["EdgeShield Contributors"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full", "signal"] }
+
+# HTTP / REST
+axum = "0.7"
+tower = "0.5"
+
+# Logging / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Packet capture & parsing
+pnet = "0.35"
+pcap = "2"
+etherparse = "0.16"
+bytes = "1"
+
+# Concurrency
+dashmap = "6"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+mac_address = { version = "1", features = ["serde"] }
+ipnetwork = "0.20"
+rusqlite = { version = "0.31", features = ["bundled"] }

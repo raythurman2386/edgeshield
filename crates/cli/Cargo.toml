@@ -1,0 +1,19 @@
+[package]
+name = "edgeshield-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "edgeshield"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true, features = ["derive", "unstable-styles"] }
+clap_complete = "4"
+libc = "0.2"
+tokio.workspace = true
+anyhow.workspace = true
+nix = { version = "0.29", default-features = false, features = ["user"] }
+edgeshield-config = { path = "../config" }
+edgeshield-daemon = { path = "../daemon" }

@@ -1,0 +1,18 @@
+[package]
+name = "edgeshield-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dashmap.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+mac_address.workspace = true
+ipnetwork.workspace = true
+tokio.workspace = true
+edgeshield-common = { path = "../common" }
+edgeshield-packet = { path = "../packet" }
+edgeshield-protocol = { path = "../protocol" }
+edgeshield-storage = { path = "../storage" }

@@ -1,0 +1,40 @@
+# Rust
+target/
+Cargo.lock
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+*.a
+*.lib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+*.profraw
+lcov.info
+
+# Fuzz
+fuzz/corpus/
+fuzz/artifacts/

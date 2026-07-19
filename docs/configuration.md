@@ -1,0 +1,237 @@
+# Configuration
+
+EdgeShield uses a single TOML configuration file. The default path is `/etc/edgeshield/config.toml`, but a custom path can be specified with the `--config` flag.
+
+## File Location
+
+```bash
+# Default
+sudo edgeshield run
+
+# Custom path
+sudo edgeshield run --config /home/pi/edgeshield.toml
+```
+
+## Configuration Reference
+
+### `interface` (required)
+
+The network interface to capture packets on.
+
+- **Type**: string
+- **Required**: yes
+- **Default**: none (must be specified)
+
+```toml
+interface = "eth0"
+```
+
+Common values:
+
+| Value | Description |
+|-------|-------------|
+| `eth0` | Wired Ethernet (Raspberry Pi) |
+| `wlan0` | Wi-Fi interface (requires monitor mode) |
+| `enp3s0` | Wired Ethernet (desktop Linux) |
+| `en0` | Wired Ethernet (macOS) |
+
+The interface must exist and the process must have `CAP_NET_RAW` capability (or run as root) to open a raw socket on it.
+
+### `api_port` (optional)
+
+The port for the REST API HTTP server.
+
+- **Type**: integer (u16)
+- **Required**: no
+- **Default**: `8080`
+
+```toml
+api_port = 8080
+```
+
+The API server binds to `0.0.0.0`. In production, consider:
+
+- Binding to `127.0.0.1` and using a reverse proxy (future feature)
+- Using a firewall to restrict access to the API port
+- Changing the port to avoid conflicts with other services
+
+### `log_level` (optional)
+
+The log level filter for structured JSON logging.
+
+- **Type**: string
+- **Required**: no
+- **Default**: `"info"`
+- **Valid values**: `"trace"`, `"debug"`, `"info"`, `"warn"`, `"error"`
+
+```toml
+log_level = "info"
+```
+
+| Level | Use Case |
+|-------|----------|
+| `error` | Production — only log errors |
+| `warn` | Production — log warnings and errors |
+| `info` | Default — log lifecycle events |
+| `debug` | Development — detailed subsystem state |
+| `trace` | Debugging — per-packet events |
+
+The log level can also be overridden at runtime via the `RUST_LOG` environment variable, which supports per-module filtering:
+
+```bash
+RUST_LOG=edgeshield_packet=debug,edgeshield_discovery=trace edgeshield run
+```
+
+### `capture_buffer` (optional)
+
+The size of the bounded mpsc channel between the capture thread and the pipeline task. This controls the maximum number of packets that can be queued before backpressure drops packets.
+
+- **Type**: integer (usize)
+- **Required**: no
+- **Default**: `4096`
+
+```toml
+capture_buffer = 4096
+```
+
+**Tuning guidance**:
+
+| Network Size | Recommended Buffer | Notes |
+|--------------|-------------------|-------|
+| Home (< 20 devices) | 1024 | Low traffic, minimal buffering needed |
+| Small office (< 50 devices) | 4096 | Default — good for most networks |
+| Large office (< 200 devices) | 16384 | Higher traffic, more buffering |
+| Enterprise (> 200 devices) | 65536 | High traffic, but consider hardware upgrade |
+
+A larger buffer reduces packet drops during traffic bursts but uses more memory. Each buffer slot holds one `PacketBuf` (typically ~1514 bytes for a full Ethernet frame). A buffer of 4096 uses approximately 6 MB of memory for the channel.
+
+---
+
+## Complete Example
+
+### Minimal configuration
+
+```toml
+interface = "eth0"
+```
+
+### Full configuration with defaults
+
+```toml
+interface       = "eth0"
+api_port        = 8080
+log_level       = "info"
+capture_buffer  = 4096
+```
+
+### Development configuration
+
+```toml
+interface       = "eth0"
+api_port        = 9090
+log_level       = "debug"
+capture_buffer  = 1024
+```
+
+### Production configuration
+
+```toml
+interface       = "eth0"
+api_port        = 8080
+log_level       = "warn"
+capture_buffer  = 16384
+```
+
+---
+
+## Environment Variables
+
+The following environment variables override configuration file values:
+
+| Variable | Overrides | Example |
+|----------|-----------|---------|
+| `RUST_LOG` | `log_level` (with per-module support) | `RUST_LOG=debug` |
+| `EDGESHIELD_CONFIG` | Config file path | `EDGESHIELD_CONFIG=/custom/path/config.toml` |
+
+---
+
+## Future Configuration Options
+
+The following options are planned for future releases:
+
+```toml
+[api]
+bind_address = "127.0.0.1"
+tls_certificate = "/etc/edgeshield/cert.pem"
+tls_key = "/etc/edgeshield/key.pem"
+cors_origins = ["https://dashboard.example.com"]
+
+[api.auth]
+mode = "api-key"
+# api_key = "..."  # Stored as SHA-256 hash
+
+[storage]
+backend = "sqlite"
+path = "/var/lib/edgeshield/edgeshield.db"
+
+[storage.retention]
+events_days = 7
+metrics_days = 30
+alerts_days = 90
+
+[rules]
+enabled = ["new-device", "protocol-change", "volume-spike"]
+
+[rules.volume-spike]
+threshold_multiplier = 10
+window_minutes = 5
+cooldown_minutes = 30
+
+[logging]
+format = "json"  # or "pretty" for development
+correlation_id = true
+```
+
+---
+
+## Configuration Validation
+
+The configuration is validated at startup:
+
+1. **File exists**: The specified path must exist and be readable
+2. **Valid TOML**: The file must be valid TOML syntax
+3. **Interface non-empty**: The interface name must not be empty
+4. **Interface exists**: The interface must exist on the system (validated at capture start)
+5. **Port in range**: The API port must be a valid u16 (0-65535)
+6. **Log level valid**: The log level must be one of the valid values
+
+If validation fails, EdgeShield prints an error message and exits with a non-zero status code:
+
+```bash
+$ edgeshield run --config /etc/edgeshield/config.toml
+Error: failed to read config file '/etc/edgeshield/config.toml': No such file or directory
+```
+
+---
+
+## Generating a Default Configuration
+
+```bash
+edgeshield default-config
+```
+
+This prints the default configuration to stdout:
+
+```toml
+# EdgeShield Configuration
+interface = "eth0"
+api_port = 8080
+log_level = "info"
+capture_buffer = 4096
+```
+
+Redirect to a file to create a starting configuration:
+
+```bash
+edgeshield default-config > /etc/edgeshield/config.toml
+```

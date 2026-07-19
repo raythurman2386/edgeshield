@@ -1,0 +1,75 @@
+.TH EDGESHIELD 8 "2026-07-19" "0.1.0" "EdgeShield Manual"
+.SH NAME
+edgeshield \- lightweight network security monitoring daemon
+.SH SYNOPSIS
+.B edgeshield
+[\fB\-\-help\fR] [\fB\-\-version\fR]
+.B edgeshield run
+[\fB\-c\fR \fIconfig\fR]
+.B edgeshield default-config
+.SH DESCRIPTION
+EdgeShield is a lightweight, self-hosted network behavior monitoring daemon
+designed for Raspberry Pi, homelabs, and small businesses. It captures packets
+on a network interface, identifies devices by MAC/IP, tracks protocols, and
+exposes the device inventory over a REST API.
+.SH COMMANDS
+.TP
+.B run
+Start the EdgeShield daemon.
+.TP
+.B default-config
+Print the default TOML configuration to stdout.
+.SH OPTIONS
+.TP
+.BI \-c ", " \-\-config "=" path
+Path to the TOML configuration file (default: /etc/edgeshield/config.toml).
+.SH CONFIGURATION
+Configuration is read from a TOML file. The default path is
+\fI/etc/edgeshield/config.toml\fR. Fallback paths include
+\fI/usr/local/etc/edgeshield/config.toml\fR, \fI./edgeshield.toml\fR,
+and \fI./config.toml\fR.
+.P
+Example configuration:
+.P
+.RS
+.nf
+interface = "eth0"
+api_port = 8080
+log_level = "info"
+capture_buffer = 4096
+.RE
+.SH ENDPOINTS
+.TP
+.B GET /health
+Returns {"status":"ok","version":"0.1.0"}.
+.TP
+.B GET /devices
+Returns the full device inventory as a JSON array.
+.TP
+.B GET /devices/{mac}
+Returns a single device by MAC address (e.g., 00:11:22:33:44:55).
+.TP
+.B GET /metrics
+Returns aggregate metrics (device count, packet count, byte count, uptime).
+.SH FILES
+.TP
+.I /etc/edgeshield/config.toml
+Default configuration file.
+.SH SIGNALS
+.TP
+.B SIGINT, SIGTERM
+Graceful shutdown.
+.TP
+.B SIGHUP
+Reload configuration (future).
+.SH REQUIREMENTS
+Packet capture requires root privileges or the CAP_NET_RAW capability:
+.RS
+.nf
+sudo setcap cap_net_raw+ep $(which edgeshield)
+.RE
+.SH SEE ALSO
+.BR tcpdump (8),
+.BR systemd.service (5)
+.SH AUTHOR
+EdgeShield Contributors
