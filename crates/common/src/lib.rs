@@ -20,11 +20,13 @@
 pub mod alert;
 pub mod alert_store;
 pub mod error;
+pub mod history_store;
 pub mod time;
 pub mod types;
 
 pub use alert::*;
 pub use alert_store::{AlertFilter, AlertStore};
 pub use error::*;
+pub use history_store::{DeviceHistorySnapshot, DeviceHistoryStore};
 pub use time::*;
 pub use types::*;

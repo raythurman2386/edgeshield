@@ -72,13 +72,13 @@
 | Feature | Status | Notes |
 |---|---|---|
 | SQLite `DeviceStore` implementation | ✅ | `SqliteStore` with WAL mode, UPSERT, JSON serde for IPs/protocols |
-| Schema migration framework | ✅ | Auto-creates table on open; `CREATE TABLE IF NOT EXISTS` |
+| Schema migration framework | ✅ | Auto-creates table on open; `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` |
 | Config option for database path | ✅ | `database_path` in TOML; empty = in-memory fallback |
-| Device history table (per-day snapshots) | ⬜ | Deferred — requires separate history table + cron |
-| `/devices/history` API endpoint | ⬜ | Deferred — depends on history table |
-| Database vacuum / maintenance | ⬜ | Deferred — `PRAGMA auto_vacuum=INCREMENTAL` for later |
+| Device history table (per-day snapshots) | ✅ | `device_history` table with `UNIQUE(mac, snapshot_date)` upsert; `SqliteHistoryStore`; daily snapshot background task |
+| `/devices/history` API endpoint | ✅ | `GET /devices/:mac/history?from=&to=&limit=` returns daily snapshots ordered ascending |
+| Database vacuum / maintenance | ✅ | `PRAGMA incremental_vacuum` after retention deletion; `auto_vacuum=INCREMENTAL` on new DBs |
 
-**Exit criteria**: Restart the daemon, all previously discovered devices reappear. ✅ (verified via `test_sqlite_store_persistence`)
+**Exit criteria**: Restart the daemon, all previously discovered devices reappear. ✅ (verified via `test_sqlite_store_persistence`). Device history survives restarts and is queryable via the API. ✅
 
 ---
 

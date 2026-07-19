@@ -43,6 +43,7 @@ use edgeshield_packet::capture::CaptureSession;
 use edgeshield_rules::store::InMemoryAlertStore;
 use edgeshield_rules::{Rule, RuleCondition, RuleEngine};
 use edgeshield_storage::SqliteAlertStore;
+use edgeshield_storage::SqliteHistoryStore;
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
 use edgeshield_storage::store::DeviceStore;
@@ -124,6 +125,22 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         }
     };
 
+    // 6b. Create the device history store (SQLite only). Used for
+    // daily snapshots and the /devices/:mac/history API endpoint.
+    let history_store: Option<Arc<dyn edgeshield_common::DeviceHistoryStore>> =
+        if !config.database_path.is_empty() && config.storage.history_snapshot_hours > 0 {
+            match SqliteHistoryStore::open(&config.database_path)? {
+                Some(store) => {
+                    info!(path = %config.database_path, "using SQLite history store");
+                    Some(Arc::new(store))
+                }
+                None => None,
+            }
+        } else {
+            info!("device history snapshots disabled");
+            None
+        };
+
     // 7. Create the alert channel (rule engine → notifier fanout)
     let (alert_tx, alert_rx) = mpsc::channel::<edgeshield_common::Alert>(256);
 
@@ -190,11 +207,32 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         None
     };
 
+    // 11b. Start the history snapshot task (if configured)
+    let history_handle = if let Some(ref history_store) = history_store {
+        let hist_store = store.clone();
+        let hist_history = history_store.clone();
+        let snapshot_hours = config.storage.history_snapshot_hours;
+        let retention_days = config.storage.history_retention_days;
+        Some(tokio::spawn(async move {
+            history_snapshot_task(hist_store, hist_history, snapshot_hours, retention_days).await;
+        }))
+    } else {
+        None
+    };
+
     // 12. Start the API server
     let api_store = store.clone();
     let api_alert_store = alert_store.clone();
+    let api_history_store = history_store.clone();
     let api_handle = tokio::spawn(async move {
-        if let Err(e) = api::serve(config.api_port, api_store, api_alert_store).await {
+        if let Err(e) = api::serve(
+            config.api_port,
+            api_store,
+            api_alert_store,
+            api_history_store,
+        )
+        .await
+        {
             error!(error = %e, "API server error");
         }
     });
@@ -243,6 +281,9 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     if let Some(handle) = scanner_handle {
         handle.abort();
     }
+    if let Some(handle) = history_handle {
+        handle.abort();
+    }
 
     info!("EdgeShield stopped");
     Ok(())
@@ -286,6 +327,73 @@ async fn offline_scanner(
             // provides the raw signal.
             if silent_for.num_seconds() > 60 {
                 let _ = engine.emit_offline_event(device).await;
+            }
+        }
+    }
+}
+
+/// Background task for device history snapshots and retention.
+///
+/// Wakes every `snapshot_hours`, takes a snapshot of all devices
+/// (upserting one row per device into `device_history` for today's
+/// date), and deletes snapshots older than `retention_days`. Also
+/// runs incremental vacuum to reclaim freed pages.
+async fn history_snapshot_task(
+    store: Arc<dyn DeviceStore>,
+    history_store: Arc<dyn edgeshield_common::DeviceHistoryStore>,
+    snapshot_hours: u64,
+    retention_days: u64,
+) {
+    use std::time::Duration;
+
+    info!(
+        snapshot_hours,
+        retention_days, "history snapshot task starting"
+    );
+    let mut ticker = tokio::time::interval(Duration::from_secs(snapshot_hours * 3600));
+    // Skip the first (immediate) tick.
+    ticker.tick().await;
+
+    loop {
+        ticker.tick().await;
+
+        // Take a snapshot of all devices.
+        let devices = match store.list() {
+            Ok(d) => d,
+            Err(e) => {
+                error!(error = %e, "history: failed to list devices");
+                continue;
+            }
+        };
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut snapshot_count = 0;
+        for device in &devices {
+            let snapshot =
+                edgeshield_common::DeviceHistorySnapshot::from_device(device, today.clone());
+            if let Err(e) = history_store.insert_snapshot(&snapshot) {
+                error!(error = %e, mac = %device.mac, "history: failed to insert snapshot");
+            } else {
+                snapshot_count += 1;
+            }
+        }
+        info!(snapshot_count, date = %today, "history snapshots taken");
+
+        // Delete old snapshots if retention is enabled.
+        if retention_days > 0 {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+            let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+            match history_store.delete_before(&cutoff_str) {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        info!(deleted, cutoff = %cutoff_str, "old history snapshots deleted");
+                    }
+                }
+                Err(e) => error!(error = %e, "history: failed to delete old snapshots"),
+            }
+
+            // Reclaim freed pages.
+            if let Err(e) = history_store.vacuum() {
+                error!(error = %e, "history: incremental vacuum failed");
             }
         }
     }

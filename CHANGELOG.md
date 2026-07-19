@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Device history snapshots** (`edgeshield-common`, `edgeshield-storage`): new `DeviceHistoryStore` trait and `DeviceHistorySnapshot` type in `edgeshield-common`. New `SqliteHistoryStore` in `edgeshield-storage` persists daily snapshots to a `device_history` table with `UNIQUE(mac, snapshot_date)` upsert. 8 new tests.
+- **`/devices/:mac/history` API endpoint** (`edgeshield-api`): returns daily snapshots for a device, filtered by date range (`from`, `to`) and `limit`. Returns 501 if history is not enabled.
+- **`[storage]` config section** (`edgeshield-config`): `history_snapshot_hours` (default 24) and `history_retention_days` (default 90). Set `history_snapshot_hours = 0` to disable. 3 new tests.
+- **History snapshot + maintenance background task** (`edgeshield-daemon`): wakes every `history_snapshot_hours`, snapshots all devices, deletes snapshots older than `history_retention_days`, and runs `PRAGMA incremental_vacuum`.
+- **Database vacuum** (`edgeshield-storage`): `PRAGMA incremental_vacuum` reclaim after retention deletion. Safe no-op if `auto_vacuum` is not enabled.
 - **SQLite alert store** (`edgeshield-storage`): new `SqliteAlertStore` persists alert history to the same SQLite database as devices. Alert history now survives daemon restarts. Schema includes indexes on timestamp, mac, and acknowledged for fast queries.
 - **`/alerts` API endpoints** (`edgeshield-api`): four new endpoints for alert management — `GET /alerts` (list with filters: severity, acknowledged, rule, limit), `GET /alerts/:id` (single alert), `POST /alerts/:id/acknowledge` (mark as acknowledged), `DELETE /alerts/:id` (delete alert).
 - **Prometheus text metrics** (`edgeshield-api`): new `GET /metrics/prometheus` endpoint returning metrics in Prometheus text exposition format. Exposes `edgeshield_devices_total`, `edgeshield_packets_total`, `edgeshield_bytes_total`, `edgeshield_uptime_seconds`, and `edgeshield_alerts_total`. The existing JSON `/metrics` endpoint is preserved for programmatic consumption.

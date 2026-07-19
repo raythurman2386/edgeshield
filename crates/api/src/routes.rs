@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use tracing::{Level, span};
 
-use edgeshield_common::{Alert, AlertFilter, Device};
+use edgeshield_common::{Alert, AlertFilter, Device, DeviceHistorySnapshot};
 
 use crate::api::AppState;
 
@@ -106,6 +106,70 @@ pub async fn get_device(
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to get device".to_string(),
+            ))
+        }
+    }
+}
+
+/// GET /devices/{mac}/history
+///
+/// Returns the daily snapshot history for a device. Query params:
+/// - `from` — start date (YYYY-MM-DD, inclusive)
+/// - `to` — end date (YYYY-MM-DD, inclusive)
+/// - `limit` — maximum number of snapshots to return (default 90)
+pub async fn get_device_history(
+    State(state): State<AppState>,
+    Path(mac): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<DeviceHistorySnapshot>>, (StatusCode, String)> {
+    let span = span!(Level::INFO, "api-get-device-history", mac = %mac);
+    let _guard = span.enter();
+
+    // Check if history is enabled.
+    let history_store = match &state.history_store {
+        Some(s) => s,
+        None => {
+            return Err((
+                StatusCode::NOT_IMPLEMENTED,
+                "device history is not enabled (set database_path and history_snapshot_hours > 0)"
+                    .to_string(),
+            ));
+        }
+    };
+
+    // Parse the MAC address.
+    let mac_orig = mac.clone();
+    let mac_clean = mac.replace(':', "");
+    let bytes: [u8; 6] = hex::decode(&mac_clean)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid MAC address: {mac_orig}"),
+            )
+        })?
+        .try_into()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("invalid MAC address length: {mac_orig}"),
+            )
+        })?;
+    let mac = MacAddress::new(bytes);
+
+    let from = params.get("from").map(String::as_str);
+    let to = params.get("to").map(String::as_str);
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse().ok())
+        .or(Some(90));
+
+    match history_store.list_history(&mac, from, to, limit) {
+        Ok(snapshots) => Ok(Json(snapshots)),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list device history");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to list device history".to_string(),
             ))
         }
     }
@@ -354,7 +418,11 @@ mod tests {
         device.add_ip("192.168.1.10".parse().unwrap());
         store.upsert(device).unwrap();
 
-        let state = AppState { store, alert_store };
+        let state = AppState {
+            store,
+            alert_store,
+            history_store: None,
+        };
 
         Router::new()
             .route("/health", get(health))

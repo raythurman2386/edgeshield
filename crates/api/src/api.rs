@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::Router;
 use tracing::info;
 
-use edgeshield_common::AlertStore;
+use edgeshield_common::{AlertStore, DeviceHistoryStore};
 use edgeshield_storage::store::DeviceStore;
 
 use crate::routes;
@@ -20,33 +20,33 @@ pub struct AppState {
     pub store: Arc<dyn DeviceStore>,
     /// The alert store (shared with the rule engine).
     pub alert_store: Arc<dyn AlertStore>,
+    /// The device history store (shared with the snapshot task).
+    /// `None` when history is disabled (in-memory mode or
+    /// `history_snapshot_hours = 0`).
+    pub history_store: Option<Arc<dyn DeviceHistoryStore>>,
 }
 
 /// Start the REST API server.
-///
-/// # Arguments
-///
-/// * `port` - The port to listen on
-/// * `store` - The shared device store
-/// * `alert_store` - The shared alert store
-///
-/// # Design
-///
-/// The API server runs on a separate tokio task from the capture pipeline.
-/// It shares the device store via `Arc<dyn DeviceStore>`, which is lock-free
-/// for reads (DashMap). Discovery events are consumed by the rule engine,
-/// not by the API.
 pub async fn serve(
     port: u16,
     store: Arc<dyn DeviceStore>,
     alert_store: Arc<dyn AlertStore>,
+    history_store: Option<Arc<dyn DeviceHistoryStore>>,
 ) -> Result<(), anyhow::Error> {
-    let state = AppState { store, alert_store };
+    let state = AppState {
+        store,
+        alert_store,
+        history_store,
+    };
 
     let app = Router::new()
         .route("/health", axum::routing::get(routes::health))
         .route("/devices", axum::routing::get(routes::list_devices))
         .route("/devices/:mac", axum::routing::get(routes::get_device))
+        .route(
+            "/devices/:mac/history",
+            axum::routing::get(routes::get_device_history),
+        )
         .route("/metrics", axum::routing::get(routes::metrics))
         .route(
             "/metrics/prometheus",

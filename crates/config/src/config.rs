@@ -74,6 +74,12 @@ pub struct Config {
     /// longer than any `device_offline` rule's threshold.
     #[serde(default)]
     pub scanner: ScannerConfig,
+
+    /// Storage settings for device history snapshots and retention.
+    /// When present, the daemon takes daily snapshots of all devices
+    /// and deletes snapshots older than the retention period.
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 /// MQTT broker configuration for new-device alerting.
@@ -331,6 +337,40 @@ impl Default for ScannerConfig {
     }
 }
 
+/// Storage settings for device history snapshots and retention.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StorageConfig {
+    /// How often (in hours) to take a snapshot of all devices. The
+    /// snapshot upserts one row per device into the `device_history`
+    /// table, keyed by `(mac, snapshot_date)`. Running more
+    /// frequently than 24h just updates today's row with the latest
+    /// state. Default 24h. Set to 0 to disable history snapshots.
+    #[serde(default = "default_history_snapshot_hours")]
+    pub history_snapshot_hours: u64,
+
+    /// Delete device history snapshots older than this many days.
+    /// Default 90. Set to 0 to disable retention (keep forever).
+    #[serde(default = "default_history_retention_days")]
+    pub history_retention_days: u64,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            history_snapshot_hours: default_history_snapshot_hours(),
+            history_retention_days: default_history_retention_days(),
+        }
+    }
+}
+
+fn default_history_snapshot_hours() -> u64 {
+    24
+}
+
+fn default_history_retention_days() -> u64 {
+    90
+}
+
 fn default_rule_enabled() -> bool {
     true
 }
@@ -373,6 +413,7 @@ impl Default for Config {
             email: None,
             rules: Vec::new(),
             scanner: ScannerConfig::default(),
+            storage: StorageConfig::default(),
         }
     }
 }
@@ -772,5 +813,39 @@ mod tests {
         "#;
         let config: Config = toml.parse().unwrap();
         assert_eq!(config.scanner.interval_seconds, 120);
+    }
+
+    #[test]
+    fn test_storage_defaults() {
+        let toml = r#"
+            interface = "eth0"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.storage.history_snapshot_hours, 24);
+        assert_eq!(config.storage.history_retention_days, 90);
+    }
+
+    #[test]
+    fn test_storage_custom_settings() {
+        let toml = r#"
+            interface = "eth0"
+            [storage]
+            history_snapshot_hours = 12
+            history_retention_days = 30
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.storage.history_snapshot_hours, 12);
+        assert_eq!(config.storage.history_retention_days, 30);
+    }
+
+    #[test]
+    fn test_storage_disable_retention() {
+        let toml = r#"
+            interface = "eth0"
+            [storage]
+            history_retention_days = 0
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.storage.history_retention_days, 0);
     }
 }
