@@ -7,6 +7,10 @@
 
 pub mod classifier;
 pub mod dhcp;
+pub mod mdns;
+pub mod ntp;
 
 pub use classifier::*;
 pub use dhcp::*;
+pub use mdns::*;
+pub use ntp::*;

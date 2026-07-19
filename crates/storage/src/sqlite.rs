@@ -17,9 +17,18 @@
 //!     bytes_sent INTEGER NOT NULL DEFAULT 0,
 //!     bytes_received INTEGER NOT NULL DEFAULT 0,
 //!     protocols TEXT NOT NULL DEFAULT '[]',
-//!     vendor TEXT
+//!     vendor TEXT,
+//!     dhcp_vendor_class TEXT,
+//!     protocol_stats TEXT NOT NULL DEFAULT '{}'
 //! );
 //! ```
+//!
+//! # Migrations
+//!
+//! The schema uses `CREATE TABLE IF NOT EXISTS` for new databases and
+//! `ALTER TABLE ADD COLUMN` for upgrades from earlier schemas. Columns
+//! added by later phases are nullable or have defaults so old code
+//! keeps working against a new schema.
 //!
 //! # Concurrency
 //!
@@ -76,12 +85,59 @@ impl SqliteStore {
                 bytes_sent INTEGER NOT NULL DEFAULT 0,
                 bytes_received INTEGER NOT NULL DEFAULT 0,
                 protocols TEXT NOT NULL DEFAULT '[]',
-                vendor TEXT
+                vendor TEXT,
+                dhcp_vendor_class TEXT,
+                protocol_stats TEXT NOT NULL DEFAULT '{}'
             );"
         ).map_err(|e| StorageError::Internal(format!("failed to create schema: {}", e)))?;
 
+        // Migrations: add columns introduced after the initial schema.
+        // `ALTER TABLE ADD COLUMN` is idempotent-safe via the PRAGMA
+        // check below — we swallow "duplicate column" errors since they
+        // mean the migration already ran.
+        Self::migrate(&conn)?;
+
         info!(path = %path, "SQLite store opened");
         Ok(Some(Self { conn: Mutex::new(conn) }))
+    }
+
+    /// Run additive schema migrations. Each `ALTER TABLE ADD COLUMN`
+    /// is wrapped to ignore "duplicate column name" errors, which
+    /// means the column already exists (migration already applied).
+    fn migrate(conn: &Connection) -> Result<(), StorageError> {
+        // Phase 4: DHCP vendor class identifier.
+        Self::add_column_if_missing(conn, "devices", "dhcp_vendor_class", "TEXT")?;
+        // Phase 4: per-protocol packet statistics (JSON map).
+        Self::add_column_if_missing(conn, "devices", "protocol_stats", "TEXT NOT NULL DEFAULT '{}'")?;
+        Ok(())
+    }
+
+    /// Add a column to a table, ignoring the error if the column
+    /// already exists. This is the simplest idempotent migration
+    /// strategy for SQLite, which lacks `ADD COLUMN IF NOT EXISTS`.
+    fn add_column_if_missing(
+        conn: &Connection,
+        table: &str,
+        column: &str,
+        decl: &str,
+    ) -> Result<(), StorageError> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+        match conn.execute_batch(&sql) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let msg = format!("{e}");
+                // SQLite error for a duplicate column is
+                // "duplicate column name: <column>".
+                if msg.contains("duplicate column name") {
+                    trace!(column, "migration already applied");
+                    Ok(())
+                } else {
+                    Err(StorageError::Internal(format!(
+                        "failed to add column {column}: {msg}"
+                    )))
+                }
+            }
+        }
     }
 
     /// Serialize a set of IP addresses to a JSON string for storage.
@@ -112,6 +168,11 @@ impl SqliteStore {
             "TCP" => Some(Protocol::Tcp),
             "UDP" => Some(Protocol::Udp),
             "DNS" => Some(Protocol::Dns),
+            "DHCP" => Some(Protocol::Dhcp),
+            "HTTP" => Some(Protocol::Http),
+            "HTTPS" => Some(Protocol::Https),
+            "mDNS" => Some(Protocol::Mdns),
+            "NTP" => Some(Protocol::Ntp),
             _ => {
                 if let Some(n) = p.strip_prefix("UNKNOWN(").and_then(|s| s.strip_suffix(')')) {
                     n.parse().ok().map(Protocol::Other)
@@ -120,6 +181,49 @@ impl SqliteStore {
                 }
             }
         }).collect()
+    }
+
+    /// Serialize per-protocol packet counts to a JSON object for storage.
+    /// Keys are the `Display` form of each protocol (e.g., "TCP", "mDNS").
+    fn protocol_stats_to_json(stats: &std::collections::BTreeMap<Protocol, u64>) -> String {
+        // Use a Vec of (String, u64) to preserve a stable key order
+        // independent of the Protocol enum's Ord derivation.
+        let v: Vec<(String, u64)> = stats
+            .iter()
+            .map(|(p, c)| (p.to_string(), *c))
+            .collect();
+        serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Deserialize a JSON object back to a per-protocol count map.
+    fn protocol_stats_from_json(s: &str) -> std::collections::BTreeMap<Protocol, u64> {
+        let v: Vec<(String, u64)> = serde_json::from_str(s).unwrap_or_default();
+        let mut map = std::collections::BTreeMap::new();
+        for (p_str, count) in v {
+            // Reuse the same parsing logic as protocols_from_json.
+            let proto = match p_str.as_str() {
+                "ARP" => Some(Protocol::Arp),
+                "IPv4" => Some(Protocol::Ipv4),
+                "ICMP" => Some(Protocol::Icmp),
+                "TCP" => Some(Protocol::Tcp),
+                "UDP" => Some(Protocol::Udp),
+                "DNS" => Some(Protocol::Dns),
+                "DHCP" => Some(Protocol::Dhcp),
+                "HTTP" => Some(Protocol::Http),
+                "HTTPS" => Some(Protocol::Https),
+                "mDNS" => Some(Protocol::Mdns),
+                "NTP" => Some(Protocol::Ntp),
+                _ => p_str
+                    .strip_prefix("UNKNOWN(")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .and_then(|n| n.parse().ok())
+                    .map(Protocol::Other),
+            };
+            if let Some(p) = proto {
+                map.insert(p, count);
+            }
+        }
+        map
     }
 
     /// Convert a SQLite row to a Device.
@@ -134,6 +238,11 @@ impl SqliteStore {
         let bytes_received: u64 = row.get(7)?;
         let protocols_str: String = row.get(8)?;
         let vendor: Option<String> = row.get(9)?;
+        // Columns added by Phase 4 migrations. Use fallible get with
+        // a default so old rows (or a partially-migrated DB) don't
+        // break the read.
+        let dhcp_vendor_class: Option<String> = row.get(10).unwrap_or(None);
+        let protocol_stats_str: String = row.get(11).unwrap_or_else(|_| "{}".to_string());
 
         let mac = mac_str.parse::<MacAddress>()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -156,6 +265,8 @@ impl SqliteStore {
             bytes_received,
             protocols: Self::protocols_from_json(&protocols_str),
             vendor,
+            dhcp_vendor_class,
+            protocol_stats: Self::protocol_stats_from_json(&protocol_stats_str),
         })
     }
 }
@@ -168,7 +279,7 @@ impl DeviceStore for SqliteStore {
         })?;
 
         let mut stmt = conn
-            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor FROM devices WHERE mac = ?1")
+            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices WHERE mac = ?1")
             .map_err(|e| StorageError::Internal(format!("query prepare failed: {}", e)))?;
 
         let mut rows = stmt.query(params![mac.to_string()])
@@ -189,8 +300,8 @@ impl DeviceStore for SqliteStore {
         })?;
 
         conn.execute(
-            "INSERT INTO devices (mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO devices (mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(mac) DO UPDATE SET
                 ips = excluded.ips,
                 hostname = excluded.hostname,
@@ -199,7 +310,9 @@ impl DeviceStore for SqliteStore {
                 bytes_sent = excluded.bytes_sent,
                 bytes_received = excluded.bytes_received,
                 protocols = excluded.protocols,
-                vendor = excluded.vendor",
+                vendor = excluded.vendor,
+                dhcp_vendor_class = excluded.dhcp_vendor_class,
+                protocol_stats = excluded.protocol_stats",
             params![
                 device.mac.to_string(),
                 Self::ips_to_json(&device.ips),
@@ -211,6 +324,8 @@ impl DeviceStore for SqliteStore {
                 device.bytes_received,
                 Self::protocols_to_json(&device.protocols),
                 device.vendor,
+                device.dhcp_vendor_class,
+                Self::protocol_stats_to_json(&device.protocol_stats),
             ],
         ).map_err(|e| StorageError::Internal(format!("upsert failed: {}", e)))?;
 
@@ -224,7 +339,7 @@ impl DeviceStore for SqliteStore {
         })?;
 
         let mut stmt = conn
-            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor FROM devices ORDER BY mac")
+            .prepare("SELECT mac, ips, hostname, first_seen, last_seen, packet_count, bytes_sent, bytes_received, protocols, vendor, dhcp_vendor_class, protocol_stats FROM devices ORDER BY mac")
             .map_err(|e| StorageError::Internal(format!("query prepare failed: {}", e)))?;
         let rows = stmt
             .query_map([], Self::row_to_device)
@@ -384,5 +499,59 @@ mod tests {
         let json = SqliteStore::protocols_to_json(&protocols);
         let recovered = SqliteStore::protocols_from_json(&json);
         assert_eq!(protocols, recovered);
+    }
+
+    #[test]
+    fn test_serde_protocol_stats_roundtrip() {
+        let mut stats = std::collections::BTreeMap::new();
+        stats.insert(Protocol::Tcp, 10);
+        stats.insert(Protocol::Mdns, 5);
+        stats.insert(Protocol::Other(42), 1);
+
+        let json = SqliteStore::protocol_stats_to_json(&stats);
+        let recovered = SqliteStore::protocol_stats_from_json(&json);
+        assert_eq!(stats, recovered);
+    }
+
+    #[test]
+    fn test_sqlite_store_roundtrip_dhcp_vendor_class_and_stats() {
+        let store = open_test_store();
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let mut device = Device::new(mac);
+        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(200, Protocol::Tcp);
+        device.record_sent(50, Protocol::Mdns);
+        device.dhcp_vendor_class = Some("android-dhcp-13".to_string());
+
+        store.upsert(device.clone()).unwrap();
+        let retrieved = store.get(&mac).unwrap().unwrap();
+
+        assert_eq!(retrieved.dhcp_vendor_class.as_deref(), Some("android-dhcp-13"));
+        assert_eq!(retrieved.protocol_stats.get(&Protocol::Tcp), Some(&2));
+        assert_eq!(retrieved.protocol_stats.get(&Protocol::Mdns), Some(&1));
+    }
+
+    #[test]
+    fn test_sqlite_store_persists_new_fields_across_reopen() {
+        let path = format!("/tmp/edgeshield-stats-test-{}.db", std::process::id());
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            let mut device = test_device("00:11:22:33:44:55");
+            device.record_sent(100, Protocol::Tcp);
+            device.dhcp_vendor_class = Some("MSFT 5.0".to_string());
+            store.upsert(device).unwrap();
+        }
+
+        {
+            let store = SqliteStore::open(&path).unwrap().unwrap();
+            let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+            let retrieved = store.get(&mac).unwrap().unwrap();
+            assert_eq!(retrieved.dhcp_vendor_class.as_deref(), Some("MSFT 5.0"));
+            assert_eq!(retrieved.protocol_stats.get(&Protocol::Tcp), Some(&1));
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 }

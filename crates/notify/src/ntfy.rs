@@ -73,16 +73,16 @@ impl NtfyNotifier {
             }
         }
 
-        if let Some(priority) = self.config.priority {
-            if let Ok(value) = HeaderValue::from_str(&priority.to_string()) {
-                headers.insert("Priority", value);
-            }
+        if let Some(priority) = self.config.priority
+            && let Ok(value) = HeaderValue::from_str(&priority.to_string())
+        {
+            headers.insert("Priority", value);
         }
 
-        if let Some(ref tags) = self.config.tags {
-            if let Ok(value) = HeaderValue::from_str(tags) {
-                headers.insert("Tags", value);
-            }
+        if let Some(ref tags) = self.config.tags
+            && let Ok(value) = HeaderValue::from_str(tags)
+        {
+            headers.insert("Tags", value);
         }
 
         headers

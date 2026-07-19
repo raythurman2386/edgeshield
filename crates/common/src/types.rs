@@ -13,7 +13,7 @@
 
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use crate::time::Timestamp;
@@ -91,6 +91,17 @@ pub struct Device {
     pub protocols: BTreeSet<Protocol>,
     /// OUI vendor string (populated from MAC OUI lookup — future)
     pub vendor: Option<String>,
+    /// DHCP vendor class identifier (option 60). Populated from
+    /// DHCP DISCOVER/REQUEST packets. This is the client's self-reported
+    /// vendor class (e.g., "MSFT 5.0", "android-dhcp") — distinct from
+    /// the OUI vendor which comes from the MAC address registry.
+    pub dhcp_vendor_class: Option<String>,
+    /// Per-protocol packet counts. Maps each detected protocol to the
+    /// number of packets observed for that protocol. Useful for
+    /// fingerprinting (e.g., a device that only does mDNS + DNS is
+    /// likely an IoT appliance; one doing HTTPS + NTP is likely a
+    /// workstation). Stored as a JSON object in SQLite.
+    pub protocol_stats: BTreeMap<Protocol, u64>,
 }
 
 impl Device {
@@ -110,6 +121,8 @@ impl Device {
             bytes_received: 0,
             protocols: BTreeSet::new(),
             vendor: None,
+            dhcp_vendor_class: None,
+            protocol_stats: BTreeMap::new(),
         }
     }
 
@@ -121,7 +134,9 @@ impl Device {
     pub fn record_sent(&mut self, bytes: u64, protocol: Protocol) {
         self.packet_count = self.packet_count.saturating_add(1);
         self.bytes_sent = self.bytes_sent.saturating_add(bytes);
-        self.protocols.insert(protocol);
+        self.protocols.insert(protocol.clone());
+        let entry = self.protocol_stats.entry(protocol).or_insert(0);
+        *entry = entry.saturating_add(1);
         self.last_seen = Timestamp::now();
     }
 
@@ -131,7 +146,9 @@ impl Device {
     pub fn record_received(&mut self, bytes: u64, protocol: Protocol) {
         self.packet_count = self.packet_count.saturating_add(1);
         self.bytes_received = self.bytes_received.saturating_add(bytes);
-        self.protocols.insert(protocol);
+        self.protocols.insert(protocol.clone());
+        let entry = self.protocol_stats.entry(protocol).or_insert(0);
+        *entry = entry.saturating_add(1);
         self.last_seen = Timestamp::now();
     }
 
@@ -222,5 +239,49 @@ mod tests {
         assert_eq!(deserialized.bytes_received, device.bytes_received);
         assert_eq!(deserialized.protocols, device.protocols);
         assert_eq!(deserialized.ips, device.ips);
+    }
+
+    #[test]
+    fn test_protocol_stats_incremented_on_record_sent() {
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let mut device = Device::new(mac);
+        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(200, Protocol::Tcp);
+        device.record_sent(50, Protocol::Udp);
+        assert_eq!(device.protocol_stats.get(&Protocol::Tcp), Some(&2));
+        assert_eq!(device.protocol_stats.get(&Protocol::Udp), Some(&1));
+        assert_eq!(device.protocol_stats.get(&Protocol::Dns), None);
+    }
+
+    #[test]
+    fn test_protocol_stats_incremented_on_record_received() {
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let mut device = Device::new(mac);
+        device.record_received(100, Protocol::Dns);
+        device.record_received(100, Protocol::Dns);
+        device.record_received(100, Protocol::Dns);
+        assert_eq!(device.protocol_stats.get(&Protocol::Dns), Some(&3));
+    }
+
+    #[test]
+    fn test_dhcp_vendor_class_default_none() {
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let device = Device::new(mac);
+        assert!(device.dhcp_vendor_class.is_none());
+        assert!(device.protocol_stats.is_empty());
+    }
+
+    #[test]
+    fn test_protocol_stats_serde_roundtrip() {
+        let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
+        let mut device = Device::new(mac);
+        device.record_sent(100, Protocol::Tcp);
+        device.record_sent(200, Protocol::Mdns);
+        device.dhcp_vendor_class = Some("MSFT 5.0".to_string());
+
+        let json = serde_json::to_string(&device).unwrap();
+        let deserialized: Device = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.protocol_stats, device.protocol_stats);
+        assert_eq!(deserialized.dhcp_vendor_class, device.dhcp_vendor_class);
     }
 }

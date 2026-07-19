@@ -1,8 +1,8 @@
 # EdgeShield ROADMAP
 
-> **Status**: Phase 4 (Protocol Depth + Device Fingerprinting)
+> **Status**: Phase 5 (Alerting & Rules)
 > **Version**: 0.1.0
-> **Last updated**: 2026-07-18
+> **Last updated**: 2026-07-19
 
 ---
 
@@ -82,7 +82,7 @@
 
 ---
 
-## Phase 4: Protocol Depth & Device Fingerprinting 🔄
+## Phase 4: Protocol Depth & Device Fingerprinting ✅
 
 **Goal**: Detect application-layer protocols beyond port heuristics, and enrich device records with vendor and hostname so alerts are actionable.
 
@@ -91,16 +91,16 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 | Feature | Priority | Effort | Depends On | Status |
 |---|---|---|---|---|
 | DHCP detection (hostname extraction) | P0 | 2 days | — | ✅ Delivered (Phase 1 classifier + discovery wiring) |
-| HTTP request/response detection | P1 | 3 days | — | ⬜ |
-| mDNS / Bonjour detection | P1 | 2 days | — | ⬜ |
-| NTP detection | P2 | 0.5 day | — | ⬜ |
-| DHCP fingerprint (vendor class) | P2 | 2 days | — | ⬜ |
-| Protocol statistics per device | P1 | 1 day | — | ⬜ |
+| HTTP request/response detection | P1 | 3 days | — | ✅ Delivered (port 80 + banner sniffing for non-standard ports) |
+| mDNS / Bonjour detection | P1 | 2 days | — | ✅ Delivered (DNS wire-format parser, SRV/PTR record extraction, hostname + instance name) |
+| NTP detection | P2 | 0.5 day | — | ✅ Delivered (header validation: version 3/4, mode 1-6) |
+| DHCP fingerprint (vendor class) | P2 | 2 days | — | ✅ Delivered (option 60 vendor_class stored on device) |
+| Protocol statistics per device | P1 | 1 day | — | ✅ Delivered (per-protocol packet counts, persisted to SQLite, exposed via API) |
 | **MAC OUI vendor lookup** | P0 | 1 day | — | ✅ Delivered (39,762 IEEE entries, phf perfect-hash, build-time codegen) |
-| **Device fingerprint combiner** (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields) | P0 | 1 day | OUI lookup | ✅ Delivered (vendor populated on first sight; hostname via DHCP already worked) |
+| **Device fingerprint combiner** (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields) | P0 | 1 day | OUI lookup | ✅ Delivered (vendor populated on first sight; hostname via DHCP, fallback to mDNS) |
 | **Enrich MQTT payload with vendor** | P1 | 0.5 day | fingerprint combiner | ✅ Delivered |
 
-**Exit criteria**: A device doing DHCP gets its hostname populated. A new-device MQTT alert includes the vendor name. HTTP servers are identified by port + banner.
+**Exit criteria**: A device doing DHCP gets its hostname populated. A new-device MQTT alert includes the vendor name. HTTP servers are identified by port + banner. ✅ All met.
 
 ---
 
@@ -224,6 +224,6 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 4: Protocol Depth** — HTTP detection, mDNS/Bonjour, NTP. Device fingerprinting (OUI vendor lookup + MQTT payload enrichment) is delivered.
+**Phase 5: Alerting & Rules** — rule engine, webhook channel, alert history.
 
-**Just shipped**: MAC OUI vendor lookup (`edgeshield-oui` crate, 2026-07-18). 39,762 real IEEE OUI entries compiled into a perfect-hash map at build time. New-device MQTT alerts now include the vendor name.
+**Just shipped**: Phase 4 complete (2026-07-19). mDNS/Bonjour service name + hostname extraction, HTTP banner sniffing for non-standard ports, NTP header validation, DHCP vendor class identifier (option 60) storage, and per-protocol packet statistics. New-device alerts now carry hostnames from DHCP or mDNS, and the device inventory tracks per-protocol traffic breakdowns.
