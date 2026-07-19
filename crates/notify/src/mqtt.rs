@@ -64,7 +64,7 @@ impl NewDevicePayload {
     /// rather than the full set to keep the MQTT message small. The full
     /// device record is available via the REST API for consumers that
     /// need it.
-    fn from_device(device: &Device, protocol: &str) -> Self {
+    pub fn from_device(device: &Device, protocol: &str) -> Self {
         Self {
             event: "new_device",
             mac: device.mac.to_string(),

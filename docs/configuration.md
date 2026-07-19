@@ -173,6 +173,57 @@ mqtt:
 
 The password is read from the config file in plaintext. For production, prefer a broker that accepts anonymous clients on a trusted VLAN, or run EdgeShield under systemd with `LoadCredential=` and a config that reads the password from a protected path. Do not commit credentials to version control.
 
+### `[ntfy]` (optional)
+
+ntfy.sh notification settings. When present, EdgeShield POSTs a JSON event to the configured ntfy server every time a **new device** is discovered on the network. When absent, ntfy is disabled.
+
+ntfy is an HTTP-based pub/sub service (https://ntfy.sh). Unlike MQTT, it requires no broker — you POST to a topic URL and any subscriber receives the message. This makes it a good fit for homelabs without an MQTT broker. If both `[mqtt]` and `[ntfy]` are configured, ntfy takes precedence and MQTT is ignored (with a log line).
+
+- **Type**: table
+- **Required**: no
+- **Default**: absent (ntfy disabled)
+
+```toml
+[ntfy]
+base_url = "https://ntfy.sh"
+topic = "edgeshield"
+# token = "tok_your_access_token"
+# priority = 2
+# tags = "warning,desktop"
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_url` | string | (required) | Server URL without trailing slash (e.g., `https://ntfy.sh`) |
+| `topic` | string | (required) | Topic name; publish URL becomes `{base_url}/{topic}` |
+| `token` | string | none | Optional `Bearer` token for authenticated servers |
+| `priority` | integer | none | ntfy priority header (1 = max, 5 = min) |
+| `tags` | string | none | Comma-separated emoji shortcodes (e.g., `warning,desktop`) |
+
+#### Published message format
+
+The POST body is the same JSON object used by the MQTT notifier, so consumers can switch transports without changing their parsers:
+
+```json
+{
+  "event": "new_device",
+  "mac": "00:11:22:33:44:55",
+  "ip": "192.168.1.10",
+  "hostname": "living-room-plug",
+  "vendor": "TP-Link Technologies",
+  "protocol": "TCP",
+  "first_seen": "2026-07-18T12:00:00.000Z"
+}
+```
+
+The ntfy `Title` header is set to a human-readable summary (`New device: <hostname|vendor|mac> (<mac>)`) so the notification card is useful before the body is expanded.
+
+#### Security
+
+The token is read from the config file in plaintext. For production, prefer a public topic on a trusted ntfy instance, or run EdgeShield under systemd with `LoadCredential=` and a config that reads the token from a protected path. Do not commit credentials to version control.
+
 ---
 
 ## Complete Example
@@ -206,6 +257,20 @@ port = 1883
 topic = "edgeshield/devices/new"
 client_id = "edgeshield"
 qos = 1
+```
+
+### Configuration with ntfy alerting
+
+```toml
+interface       = "wlan0"
+api_port        = 0
+log_level       = "info"
+capture_buffer  = 4096
+database_path   = "/var/lib/edgeshield/edgeshield.db"
+
+[ntfy]
+base_url = "https://ntfy.sh"
+topic = "edgeshield"
 ```
 
 ### Development configuration

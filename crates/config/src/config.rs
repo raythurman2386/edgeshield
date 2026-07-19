@@ -32,6 +32,17 @@ pub struct Config {
     /// is disabled and EdgeShield behaves as before.
     #[serde(default)]
     pub mqtt: Option<MqttConfig>,
+
+    /// ntfy.sh notification settings. When present, EdgeShield POSTs a
+    /// JSON event to the configured ntfy server every time a **new
+    /// device** is discovered. When absent, ntfy is disabled.
+    ///
+    /// ntfy is an HTTP-based pub/sub service (https://ntfy.sh). Unlike
+    /// MQTT, it requires no broker — you POST to a topic URL and any
+    /// subscriber receives the message. This makes it a good fit for
+    /// homelabs without an MQTT broker.
+    #[serde(default)]
+    pub ntfy: Option<NtfyConfig>,
 }
 
 /// MQTT broker configuration for new-device alerting.
@@ -99,6 +110,49 @@ fn default_mqtt_qos() -> u8 {
     1
 }
 
+/// ntfy.sh notification configuration.
+///
+/// EdgeShield is a *publisher* only — it POSTs JSON to the topic URL
+/// (`{base_url}/{topic}`) for each new-device event. If the ntfy
+/// server is unreachable at startup, EdgeShield still runs (capture
+/// + API work); the notifier retries on each event.
+///
+/// # Security
+///
+/// The access token is read from the config file in plaintext. For
+/// production, prefer a public topic on a trusted ntfy instance, or
+/// run EdgeShield under systemd with `LoadCredential=` and a config
+/// that reads the token from a protected path. Do not commit
+/// credentials to version control.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NtfyConfig {
+    /// Base URL of the ntfy server, without a trailing slash
+    /// (e.g., "https://ntfy.example.com" or "https://ntfy.sh").
+    pub base_url: String,
+
+    /// Topic name to publish to. The full publish URL becomes
+    /// `{base_url}/{topic}` (e.g., "https://ntfy.sh/edgeshield").
+    pub topic: String,
+
+    /// Optional access token for authenticated ntfy servers. Sent as
+    /// the `Authorization: Bearer <token>` header. When absent, the
+    /// topic is published anonymously (the ntfy server must allow
+    /// anonymous publishes for that topic).
+    #[serde(default)]
+    pub token: Option<String>,
+
+    /// Optional priority header (1–5, where 1 = max, 5 = min).
+    /// Mapped to the ntfy `Priority` header. When absent, ntfy uses
+    /// its default (3).
+    #[serde(default)]
+    pub priority: Option<u8>,
+
+    /// Optional tags header (comma-separated emoji shortcodes, e.g.
+    /// "warning,desktop"). Mapped to the ntfy `Tags` header.
+    #[serde(default)]
+    pub tags: Option<String>,
+}
+
 const fn default_api_port() -> u16 {
     8080
 }
@@ -124,6 +178,7 @@ impl Default for Config {
             capture_buffer: default_capture_buffer(),
             database_path: default_database_path(),
             mqtt: None,
+            ntfy: None,
         }
     }
 }
@@ -132,7 +187,7 @@ impl FromStr for Config {
     type Err = crate::ConfigError;
 
     fn from_str(content: &str) -> Result<Self, Self::Err> {
-        let config: Config = toml::from_str(content)
+        let mut config: Config = toml::from_str(content)
             .map_err(|e| crate::ConfigError::Parse(e.to_string()))?;
 
         if config.interface.trim().is_empty() {
@@ -148,6 +203,23 @@ impl FromStr for Config {
             }
             if mqtt.qos > 2 {
                 return Err(crate::ConfigError::InvalidMqttQos(mqtt.qos));
+            }
+        }
+
+        // Validate ntfy config if present. Same fail-fast rationale as
+        // MQTT: a misconfigured ntfy server should be visible at
+        // startup, not silently drop alerts at runtime.
+        if let Some(ref mut ntfy) = config.ntfy {
+            if ntfy.base_url.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyNtfyBaseUrl);
+            }
+            if ntfy.topic.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyNtfyTopic);
+            }
+            // Normalize: strip a trailing slash so callers can write
+            // either "https://ntfy.sh" or "https://ntfy.sh/".
+            if let Some(stripped) = ntfy.base_url.strip_suffix('/') {
+                ntfy.base_url = stripped.to_string();
             }
         }
 
@@ -301,5 +373,88 @@ mod tests {
             result,
             Err(crate::ConfigError::InvalidMqttQos(3))
         ));
+    }
+
+    #[test]
+    fn test_ntfy_disabled_by_default() {
+        let toml = r#"
+            interface = "eth0"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert!(config.ntfy.is_none());
+    }
+
+    #[test]
+    fn test_ntfy_config_minimal() {
+        let toml = r#"
+            interface = "eth0"
+            [ntfy]
+            base_url = "https://ntfy.sh"
+            topic = "edgeshield"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let ntfy = config.ntfy.expect("ntfy config should be present");
+        assert_eq!(ntfy.base_url, "https://ntfy.sh");
+        assert_eq!(ntfy.topic, "edgeshield");
+        assert!(ntfy.token.is_none());
+        assert!(ntfy.priority.is_none());
+        assert!(ntfy.tags.is_none());
+    }
+
+    #[test]
+    fn test_ntfy_config_full() {
+        let toml = r#"
+            interface = "eth0"
+            [ntfy]
+            base_url = "https://ntfy.example.com"
+            topic = "edgeshield-new-device"
+            token = "tok_abc123"
+            priority = 2
+            tags = "warning,desktop"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let ntfy = config.ntfy.unwrap();
+        assert_eq!(ntfy.base_url, "https://ntfy.example.com");
+        assert_eq!(ntfy.topic, "edgeshield-new-device");
+        assert_eq!(ntfy.token.as_deref(), Some("tok_abc123"));
+        assert_eq!(ntfy.priority, Some(2));
+        assert_eq!(ntfy.tags.as_deref(), Some("warning,desktop"));
+    }
+
+    #[test]
+    fn test_ntfy_trailing_slash_normalized() {
+        let toml = r#"
+            interface = "eth0"
+            [ntfy]
+            base_url = "https://ntfy.example.com/"
+            topic = "edgeshield"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        let ntfy = config.ntfy.unwrap();
+        assert_eq!(ntfy.base_url, "https://ntfy.example.com");
+    }
+
+    #[test]
+    fn test_ntfy_empty_base_url_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [ntfy]
+            base_url = ""
+            topic = "edgeshield"
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::EmptyNtfyBaseUrl)));
+    }
+
+    #[test]
+    fn test_ntfy_empty_topic_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [ntfy]
+            base_url = "https://ntfy.sh"
+            topic = ""
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::EmptyNtfyTopic)));
     }
 }

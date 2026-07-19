@@ -38,7 +38,7 @@ use tracing::{error, info, span, Level};
 use edgeshield_api::api;
 use edgeshield_config::config::Config;
 use edgeshield_discovery::discovery::{DiscoveryEngine, DiscoveryEvent};
-use edgeshield_notify::MqttNotifier;
+use edgeshield_notify::{MqttNotifier, NtfyNotifier};
 use edgeshield_packet::capture::CaptureSession;
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
@@ -77,18 +77,31 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     // 4. Create the discovery engine
     let engine = Arc::new(DiscoveryEngine::new(store.clone(), event_tx));
 
-    // 5. Start the notifier (if MQTT is configured)
+    // 5. Start the notifier (if MQTT or ntfy is configured)
     //
-    // The notifier owns the event receiver. When MQTT is disabled,
-    // event_rx is dropped and the discovery engine's try_send calls
-    // silently fail — the pipeline is unaffected.
-    let notifier_handle = if let Some(mqtt_config) = config.mqtt.clone() {
+    // The notifier owns the event receiver. When neither MQTT nor
+    // ntfy is configured, event_rx is dropped and the discovery
+    // engine's try_send calls silently fail — the pipeline is
+    // unaffected.
+    //
+    // If both are configured, ntfy wins (it's the more modern,
+    // broker-less option). MQTT is logged as ignored so the user
+    // can fix their config.
+    let notifier_handle = if let Some(ntfy_config) = config.ntfy.clone() {
+        if config.mqtt.is_some() {
+            info!("both [mqtt] and [ntfy] configured; using ntfy (MQTT ignored)");
+        }
+        let notifier = NtfyNotifier::new(ntfy_config, event_rx);
+        Some(tokio::spawn(async move {
+            notifier.run().await;
+        }))
+    } else if let Some(mqtt_config) = config.mqtt.clone() {
         let notifier = MqttNotifier::new(mqtt_config, event_rx);
         Some(tokio::spawn(async move {
             notifier.run().await;
         }))
     } else {
-        info!("MQTT notifications disabled (no [mqtt] config)");
+        info!("notifications disabled (no [mqtt] or [ntfy] config)");
         None
     };
 

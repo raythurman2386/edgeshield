@@ -21,4 +21,10 @@ pub enum ConfigError {
 
     #[error("invalid MQTT QoS {0}: must be 0, 1, or 2")]
     InvalidMqttQos(u8),
+
+    #[error("invalid ntfy config: base_url cannot be empty")]
+    EmptyNtfyBaseUrl,
+
+    #[error("invalid ntfy config: topic cannot be empty")]
+    EmptyNtfyTopic,
 }

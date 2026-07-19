@@ -30,5 +30,7 @@
 //! `notify` never depends on `api`, `packet`, or `daemon`.
 
 pub mod mqtt;
+pub mod ntfy;
 
 pub use mqtt::MqttNotifier;
+pub use ntfy::NtfyNotifier;

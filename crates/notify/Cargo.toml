@@ -11,6 +11,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 rumqttc.workspace = true
+reqwest.workspace = true
 edgeshield-common = { path = "../common" }
 edgeshield-config = { path = "../config" }
 edgeshield-discovery = { path = "../discovery" }
