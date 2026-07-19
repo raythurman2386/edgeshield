@@ -7,13 +7,21 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 ```text
 ┌─────────────────────────────────────────────────────┐
 │                    EdgeShield                       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  Packet   │→│ Protocol │→│  Device Discovery │  │
-│  │  Capture  │  │  Classify│  │  & Tracking      │  │
-│  └──────────┘  └──────────┘  └────────┬─────────┘  │
-│                                       │            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐    │
+│  │  Packet   │→│ Protocol │→│  Device Discovery │    │
+│  │  Capture  │  │  Classify│  │  & Fingerprinting│   │
+│  └──────────┘  └──────────┘  └────────┬─────────┘   │
+│                                       │             │
 │  ┌────────────────────────────────────▼──────────┐  │
-│  │         REST API + SQLite Persistence          │  │
+│  │              Rule Engine                        │  │
+│  │  (new_device, device_offline, protocol_change) │  │
+│  └────────────────────┬───────────────────────────┘  │
+│                       │                             │
+│  ┌────────────────────▼──────────────────────────┐  │
+│  │  Notifier Fan-out → [ntfy, MQTT, webhook, email]│ │
+│  └───────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────┐  │
+│  │  REST API + SQLite (devices, alerts, history)  │  │
 │  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -21,12 +29,14 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 ## Features
 
 - **Passive network monitoring** — listens only, never transmits. No active probing.
-- **Device discovery** — automatically identifies every device on your LAN by MAC address.
-- **Protocol classification** — detects ARP, IPv4, ICMP, TCP, UDP, and DNS traffic.
-- **Traffic profiling** — per-device packet counts, byte counters, and protocol fingerprints.
-- **Persistent storage** — SQLite backend so devices survive daemon restarts.
-- **New-device alerting** — publish an MQTT event the moment an unknown device joins your network. Native Home Assistant / Node-RED integration.
-- **REST API** — query device inventory, metrics, and health from any HTTP client.
+- **Device discovery** — automatically identifies every device on your LAN by MAC address, with OUI vendor lookup (39,762 IEEE entries embedded at build time).
+- **Protocol classification** — detects ARP, IPv4, ICMP, TCP, UDP, DNS, DHCP, HTTP, HTTPS, mDNS, and NTP traffic. HTTP banner sniffing catches HTTP on non-standard ports.
+- **Device fingerprinting** — hostnames from DHCP and mDNS/Bonjour, DHCP vendor class (option 60), per-protocol packet statistics.
+- **Persistent storage** — SQLite backend so devices and alert history survive daemon restarts. Daily device history snapshots with configurable retention.
+- **Rule engine** — user-configurable rules with five condition types: `new_device`, `new_device_by_vendor`, `new_device_by_mac_prefix`, `device_offline`, `protocol_change`. Per-device per-rule cooldown (debounce). Alert acknowledgment with suppression.
+- **Multi-channel alerting** — ntfy.sh, MQTT, webhook (Slack/Discord/Teams-compatible), and SMTP email. All channels run simultaneously via the notifier fan-out.
+- **REST API** — query device inventory, device history, alerts, metrics, and health. Prometheus text metrics endpoint for scraping.
+- **API security** — Bearer token authentication with SHA-256 hashed keys, constant-time comparison, read-only vs admin permission levels, per-IP rate limiting, TLS support, and audit logging.
 - **Structured JSON logging** — production-ready observability via `tracing`.
 - **Low memory footprint** — designed for Raspberry Pi Zero 2 W and similar constrained hardware.
 - **Privacy-first** — no telemetry, no external calls, no cloud dependency.
@@ -46,7 +56,7 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 - **Intrusion prevention** — EdgeShield is a monitoring tool, not a firewall or IPS. It cannot block traffic.
 - **Deep packet inspection** — EdgeShield classifies protocols but does not reassemble streams or inspect payloads beyond header analysis.
 - **Full packet capture** — EdgeShield does not store raw packets. It extracts metadata and discards payloads.
-- **Real-time alerting** — The MVP focuses on data collection. Alerting is a future milestone.
+- **Real-time alerting** — EdgeShield focuses on passive monitoring. Alerting is handled by the rule engine and external notification channels (ntfy, MQTT, webhook, email), not by EdgeShield itself acting as a real-time IPS.
 
 ## Why Rust
 
@@ -58,21 +68,34 @@ EdgeShield is written in Rust for three reasons:
 
 ## Architecture Overview
 
-EdgeShield uses a pipeline architecture with three concurrent stages:
+EdgeShield uses a pipeline architecture with concurrent stages:
 
 ```mermaid
 graph LR
     A[Capture Thread] -->|mpsc channel| B[Pipeline Task]
-    B -->|mpsc channel| C[API Server]
-    B --> D[(Device Store)]
-    C --> D
+    B -->|mpsc channel| C[Rule Engine]
+    C -->|mpsc channel| D[Notifier Fan-out]
+    D --> E[ntfy]
+    D --> F[MQTT]
+    D --> G[Webhook]
+    D --> H[Email]
+    B --> I[(Device Store)]
+    C --> J[(Alert Store)]
+    K[Offline Scanner] -->|DeviceOffline events| C
+    L[History Snapshot Task] --> I
+    M[API Server] --> I
+    M --> J
 ```
 
 | Stage | Runtime | Description |
 |-------|---------|-------------|
 | Capture | OS Thread (blocking) | Reads raw packets via `pcap` with `promisc(false)` — no WiFi disruption. |
-| Pipeline | Tokio Task | Decodes packets, classifies protocols, and updates the device store. |
-| API | Tokio Task | Serves the REST API via Axum. Shares the device store with the pipeline. |
+| Pipeline | Tokio Task | Decodes packets, classifies protocols, extracts DHCP/mDNS hostnames, updates the device store. |
+| Rule Engine | Tokio Task | Evaluates user-configured rules against discovery events, emits alerts with cooldown and acknowledgment suppression. |
+| Notifier Fan-out | Tokio Task | Delivers alerts to all configured notifiers (ntfy, MQTT, webhook, email) simultaneously. |
+| Offline Scanner | Tokio Task | Background task that detects silent devices and emits `DeviceOffline` events. |
+| History Snapshot | Tokio Task | Takes daily device snapshots and deletes old history per retention policy. |
+| API | Tokio Task | Serves the REST API via Axum with optional auth, TLS, and audit logging. |
 
 The device store is either an in-memory `DashMap` or a persistent SQLite database, selected by configuration. Both implement the `DeviceStore` trait and are shared via `Arc<dyn DeviceStore>`.
 
@@ -92,11 +115,12 @@ edgeshield/
 │   ├── config/             # TOML configuration parsing
 │   ├── telemetry/          # Structured JSON logging (tracing)
 │   ├── packet/             # Packet capture (pcap) and header decoding
-│   ├── protocol/           # Protocol classification
-│   ├── storage/            # Device store trait + MemoryStore + SqliteStore
+│   ├── protocol/           # Protocol classification (DHCP, mDNS, NTP, HTTP banners)
+│   ├── storage/            # DeviceStore + AlertStore + HistoryStore (SQLite + in-memory)
 │   ├── discovery/          # Device discovery engine
-│   ├── notify/             # MQTT new-device alerting
-│   ├── api/                # REST API (Axum)
+│   ├── rules/              # Rule engine + AlertStore trait
+│   ├── notify/             # Notifier fan-out (ntfy, MQTT, webhook, email)
+│   ├── api/                # REST API (Axum) + auth + audit
 │   ├── daemon/             # Application orchestrator
 │   └── cli/                # CLI binary entry point
 ├── docs/
@@ -145,11 +169,24 @@ sudo systemctl start edgeshield
 
 ```toml
 # /etc/edgeshield/config.toml
-interface = "eth0"
+interface = "wlan0"
+api_bind_address = "127.0.0.1"
 api_port = 8080
 log_level = "info"
-capture_buffer = 4096
-database_path = "/var/lib/edgeshield/devices.db"
+database_path = "/var/lib/edgeshield/edgeshield.db"
+
+# Alerting via ntfy (broker-less, HTTPS POST)
+[ntfy]
+base_url = "https://ntfy.sh"
+topic = "edgeshield"
+
+# API authentication (generate with: openssl rand -hex 32 | sha256sum)
+[api.auth]
+read_key_hash = "sha256-hex-of-your-read-key"
+
+# Audit log
+[api.audit]
+log_path = "/var/log/edgeshield/audit.log"
 ```
 
 ### 2. Grant capture capabilities (no root required)
@@ -167,17 +204,26 @@ edgeshield run --config /etc/edgeshield/config.toml
 ### 4. Query the API
 
 ```bash
-# Health check
+# Health check (no auth required)
 curl http://localhost:8080/health
 
-# List discovered devices
-curl http://localhost:8080/devices
+# List discovered devices (auth required)
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/devices
 
 # Get a specific device
-curl http://localhost:8080/devices/00:11:22:33:44:55
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/devices/00:11:22:33:44:55
 
-# Aggregate metrics
-curl http://localhost:8080/metrics
+# Device history (daily snapshots)
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" "http://localhost:8080/devices/00:11:22:33:44:55/history?limit=30"
+
+# List alerts
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/alerts
+
+# Aggregate metrics (JSON)
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/metrics
+
+# Prometheus text metrics (for scrapers)
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/metrics/prometheus
 ```
 
 ## Configuration
@@ -189,18 +235,61 @@ EdgeShield uses a single TOML configuration file. See [docs/configuration.md](do
 interface = "eth0"
 
 # Full configuration with all options
-interface       = "eth0"
-api_port        = 8080
-log_level       = "info"
-capture_buffer  = 4096
-database_path   = "/var/lib/edgeshield/devices.db"
+interface         = "eth0"
+api_bind_address  = "127.0.0.1"
+api_port          = 8080
+log_level         = "info"
+capture_buffer    = 4096
+database_path     = "/var/lib/edgeshield/edgeshield.db"
 
-[mqtt]
-host = "homeassistant.local"
-port = 1883
-topic = "edgeshield/devices/new"
-client_id = "edgeshield"
-qos = 1
+# Alerting rules (inline; if absent, a default new_device rule runs)
+[[rules]]
+name = "new-device-alert"
+condition = "new_device"
+severity = "info"
+cooldown_seconds = 300
+
+[[rules]]
+name = "device-offline-30min"
+condition = { device_offline = { after_seconds = 1800 } }
+severity = "warning"
+
+# Notification channels (all run simultaneously)
+[ntfy]
+base_url = "https://ntfy.sh"
+topic = "edgeshield"
+
+[webhook]
+url = "https://hooks.slack.com/services/..."
+
+[email]
+host = "smtp.gmail.com"
+port = 587
+username = "you@gmail.com"
+password = "app-password"
+from = "edgeshield@home.lan"
+to = "you@home.lan"
+
+# API security
+[api.auth]
+read_key_hash = "sha256-hex-of-your-read-key"
+admin_key_hash = "sha256-hex-of-your-admin-key"
+
+[api.tls]
+cert_path = "/etc/edgeshield/cert.pem"
+key_path = "/etc/edgeshield/key.pem"
+
+[api.audit]
+log_path = "/var/log/edgeshield/audit.log"
+
+# Device history snapshots
+[storage]
+history_snapshot_hours = 24
+history_retention_days = 90
+
+# Offline scanner
+[scanner]
+interval_seconds = 60
 ```
 
 ## Logging
@@ -213,12 +302,18 @@ EdgeShield uses structured JSON logging via the `tracing` framework. All log out
 
 ## API Overview
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check (status + version) |
-| GET | `/devices` | List all discovered devices |
-| GET | `/devices/{mac}` | Get a single device by MAC address |
-| GET | `/metrics` | Aggregate network metrics |
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/health` | Health check (status + version) | None |
+| GET | `/devices` | List all discovered devices | Read |
+| GET | `/devices/{mac}` | Get a single device by MAC address | Read |
+| GET | `/devices/{mac}/history` | Daily snapshot history for a device | Read |
+| GET | `/alerts` | List alerts (with filters) | Read |
+| GET | `/alerts/{id}` | Get a single alert by ID | Read |
+| POST | `/alerts/{id}/acknowledge` | Mark an alert as acknowledged | Admin |
+| DELETE | `/alerts/{id}` | Delete an alert | Admin |
+| GET | `/metrics` | Aggregate network metrics (JSON) | Read |
+| GET | `/metrics/prometheus` | Prometheus text exposition format | Read |
 
 See [docs/api/rest.md](docs/api/rest.md) for the complete API reference.
 

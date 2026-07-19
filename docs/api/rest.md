@@ -2,7 +2,7 @@
 
 ## Overview
 
-EdgeShield exposes a REST API for querying device inventory, system health, and aggregate metrics. The API is read-only in the MVP and uses JSON for all responses.
+EdgeShield exposes a REST API for querying device inventory, device history, alerts, system health, and aggregate metrics. The API supports optional Bearer token authentication, TLS, and audit logging.
 
 ### Base URL
 
@@ -10,11 +10,28 @@ EdgeShield exposes a REST API for querying device inventory, system health, and 
 http://<edgeshield-host>:<api-port>/
 ```
 
-The default port is `8080`. The API binds to `0.0.0.0` (all interfaces).
+The default port is `8080`. The default bind address is `0.0.0.0` (all interfaces). Set `api_bind_address = "127.0.0.1"` to restrict to local access only.
+
+### Authentication
+
+When `[api.auth]` is configured, all endpoints except `/health` require a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer $EDGESHIELD_KEY" http://localhost:8080/devices
+```
+
+Two permission levels:
+- **Read key**: GET endpoints only
+- **Admin key**: GET + POST/DELETE endpoints
+- **Single-key mode** (no `admin_key_hash`): read key grants admin access
+
+`/health` is always exempt from authentication.
+
+Failed auth attempts are rate-limited per IP (configurable via `[api.auth]`).
 
 ### Content Type
 
-All responses use `application/json`. No request bodies are required in the MVP.
+All responses use `application/json`, except `/metrics/prometheus` which uses `text/plain`.
 
 ### Error Format
 
@@ -32,9 +49,14 @@ device not found: 00:11:22:33:44:66
 | Code | Meaning | Usage |
 |------|---------|-------|
 | 200 | OK | Successful response |
-| 400 | Bad Request | Invalid MAC address format |
-| 404 | Not Found | Device not found |
+| 204 | No Content | Successful acknowledge/delete |
+| 400 | Bad Request | Invalid MAC address or alert ID format |
+| 401 | Unauthorized | Missing or invalid API key |
+| 403 | Forbidden | Read key used for admin endpoint |
+| 404 | Not Found | Device or alert not found |
+| 429 | Too Many Requests | Rate limit exceeded |
 | 500 | Internal Server Error | Unexpected server error |
+| 501 | Not Implemented | History endpoint when history is disabled |
 
 ---
 
@@ -79,26 +101,16 @@ Returns all discovered devices, sorted by MAC address.
     {
         "mac": "00:11:22:33:44:55",
         "ips": ["192.168.1.10"],
-        "hostname": null,
+        "hostname": "living-room-plug",
         "first_seen": "2026-07-18T12:00:00.000Z",
         "last_seen": "2026-07-18T12:05:00.000Z",
         "packet_count": 1500,
         "bytes_sent": 250000,
         "bytes_received": 180000,
         "protocols": ["ARP", "TCP", "UDP", "DNS"],
-        "vendor": null
-    },
-    {
-        "mac": "66:77:88:99:AA:BB",
-        "ips": ["192.168.1.20", "192.168.1.21"],
-        "hostname": null,
-        "first_seen": "2026-07-18T12:01:00.000Z",
-        "last_seen": "2026-07-18T12:04:30.000Z",
-        "packet_count": 850,
-        "bytes_sent": 120000,
-        "bytes_received": 95000,
-        "protocols": ["TCP", "ICMP"],
-        "vendor": null
+        "vendor": "TP-Link Technologies",
+        "dhcp_vendor_class": null,
+        "protocol_stats": { "TCP": 800, "UDP": 400, "DNS": 200, "ARP": 100 }
     }
 ]
 ```
@@ -109,14 +121,16 @@ Returns all discovered devices, sorted by MAC address.
 |-------|------|-------------|
 | `mac` | string | MAC address in `XX:XX:XX:XX:XX:XX` format |
 | `ips` | array of string | Observed IP addresses |
-| `hostname` | string or null | Hostname (future: DHCP discovery) |
+| `hostname` | string or null | Hostname from DHCP or mDNS |
 | `first_seen` | string | ISO 8601 timestamp of first observation |
 | `last_seen` | string | ISO 8601 timestamp of most recent observation |
 | `packet_count` | integer | Total packets observed for this device |
 | `bytes_sent` | integer | Total bytes transmitted by this device |
 | `bytes_received` | integer | Total bytes received by this device |
 | `protocols` | array of string | Detected protocols (uppercase names) |
-| `vendor` | string or null | OUI vendor name (future) |
+| `vendor` | string or null | OUI vendor name from IEEE registry |
+| `dhcp_vendor_class` | string or null | DHCP option 60 vendor class identifier |
+| `protocol_stats` | object | Per-protocol packet counts (e.g., `{"TCP": 800, "DNS": 200}`) |
 
 **Errors**:
 
@@ -225,77 +239,206 @@ curl http://localhost:8080/metrics
 
 ---
 
-## Future Endpoints
+### GET /devices/{mac}/history
 
-The following endpoints are planned for future releases:
+Returns daily snapshot history for a device. Each snapshot is a full copy of the device's state at the time of the last snapshot for that day.
 
-### GET /events
+**Path Parameters**:
 
-Returns discovery events (new devices, device updates).
+| Parameter | Type | Description | Format |
+|-----------|------|-------------|--------|
+| `mac` | string | MAC address | `XX:XX:XX:XX:XX:XX` or `XXXXXXXXXXXX` |
 
 **Query Parameters**:
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `since` | string | ISO 8601 timestamp — return events after this time |
-| `limit` | integer | Maximum number of events to return (default: 100) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `from` | string | none | Start date (`YYYY-MM-DD`, inclusive) |
+| `to` | string | none | End date (`YYYY-MM-DD`, inclusive) |
+| `limit` | integer | `90` | Maximum number of snapshots to return |
 
-### GET /events/stream
+**Response `200 OK`**:
 
-WebSocket endpoint for real-time event streaming.
+```json
+[
+    {
+        "mac": "00:11:22:33:44:55",
+        "snapshot_date": "2026-07-18",
+        "snapshot_timestamp": "2026-07-18T23:59:59.000Z",
+        "ips": ["192.168.1.10"],
+        "hostname": "living-room-plug",
+        "vendor": "TP-Link Technologies",
+        "dhcp_vendor_class": null,
+        "packet_count": 1500,
+        "bytes_sent": 250000,
+        "bytes_received": 180000,
+        "protocols": ["TCP", "DNS"],
+        "protocol_stats": { "TCP": 800, "DNS": 200 },
+        "first_seen": "2026-07-18T12:00:00.000Z",
+        "last_seen": "2026-07-18T23:59:50.000Z"
+    }
+]
+```
+
+**Errors**:
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Invalid MAC address format |
+| 501 | History not enabled (set `database_path` and `history_snapshot_hours > 0`) |
+
+**Example**:
+
+```bash
+curl -H "Authorization: Bearer $KEY" \
+  "http://localhost:8080/devices/00:11:22:33:44:55/history?from=2026-07-01&to=2026-07-19&limit=30"
+```
+
+---
 
 ### GET /alerts
 
-Returns detection engine alerts.
+Returns the alert history, optionally filtered. Ordered by most recent first.
 
 **Query Parameters**:
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `severity` | string | Filter by severity: `low`, `medium`, `high`, `critical` |
-| `since` | string | ISO 8601 timestamp |
-| `limit` | integer | Maximum number of alerts to return |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `severity` | string | none | Filter by severity: `info`, `warning`, `critical` |
+| `acknowledged` | string | none | Filter by acknowledged status: `true` or `false` |
+| `rule` | string | none | Filter by rule name (exact match) |
+| `limit` | integer | none | Maximum number of alerts to return |
+
+**Response `200 OK`**:
+
+```json
+[
+    {
+        "id": 42,
+        "rule_name": "new-device-alert",
+        "severity": "info",
+        "event_type": "new_device",
+        "mac": "00:11:22:33:44:55",
+        "message": "New device discovered: living-room-plug (00:11:22:33:44:55)",
+        "device_snapshot": { "mac": "00:11:22:33:44:55", "..." : "..." },
+        "timestamp": "2026-07-19T15:00:00.000Z",
+        "acknowledged": false
+    }
+]
+```
+
+**Example**:
+
+```bash
+# All unacknowledged warnings
+curl -H "Authorization: Bearer $KEY" \
+  "http://localhost:8080/alerts?severity=warning&acknowledged=false"
+
+# Last 10 alerts
+curl -H "Authorization: Bearer $KEY" \
+  "http://localhost:8080/alerts?limit=10"
+```
+
+---
 
 ### GET /alerts/{id}
 
 Returns a single alert by ID.
 
-### GET /api/v1/devices
+**Path Parameters**:
 
-Versioned device list endpoint (future API version).
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Alert ID |
 
-### GET /api/v1/devices/{mac}
+**Response `200 OK`**: Same as the alert object in `GET /alerts`.
 
-Versioned single device endpoint.
+**Errors**:
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Invalid alert ID |
+| 404 | Alert not found |
+
+---
+
+### POST /alerts/{id}/acknowledge
+
+Marks an alert as acknowledged. Acknowledged alerts suppress future alerts for the same device/rule combination.
+
+**Auth**: Requires admin key.
+
+**Response `204 No Content`**: Success.
+
+**Errors**:
+
+| Status | Condition |
+|--------|-----------|
+| 400 | Invalid alert ID |
+| 403 | Read key used (admin key required) |
+| 500 | Alert not found or internal error |
+
+**Example**:
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_KEY" \
+  http://localhost:8080/alerts/42/acknowledge
+```
+
+---
+
+### DELETE /alerts/{id}
+
+Deletes an alert by ID.
+
+**Auth**: Requires admin key.
+
+**Response `204 No Content`**: Success.
+
+**Example**:
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $ADMIN_KEY" \
+  http://localhost:8080/alerts/42
+```
+
+---
+
+### GET /metrics/prometheus
+
+Returns metrics in Prometheus text exposition format. Suitable for scraping by Prometheus.
+
+**Response `200 OK`** (Content-Type: `text/plain`):
+
+```text
+# HELP edgeshield_devices_total Total number of discovered devices.
+# TYPE edgeshield_devices_total gauge
+edgeshield_devices_total 15
+# HELP edgeshield_packets_total Total packets observed across all devices.
+# TYPE edgeshield_packets_total counter
+edgeshield_packets_total 45200
+# HELP edgeshield_bytes_total Total bytes observed across all devices.
+# TYPE edgeshield_bytes_total counter
+edgeshield_bytes_total 12500000
+# HELP edgeshield_uptime_seconds Daemon uptime in seconds.
+# TYPE edgeshield_uptime_seconds gauge
+edgeshield_uptime_seconds 3600
+# HELP edgeshield_alerts_total Total alerts in the alert store.
+# TYPE edgeshield_alerts_total gauge
+edgeshield_alerts_total 3
+```
+
+**Example**:
+
+```bash
+curl -H "Authorization: Bearer $KEY" http://localhost:8080/metrics/prometheus
+```
 
 ---
 
 ## Rate Limiting
 
-Rate limiting is not implemented in the MVP. Future versions may add:
+When `[api.auth]` is configured with `max_failures > 0`, failed authentication attempts are rate-limited per IP address. After `max_failures` (default 10) failed attempts within `window_seconds` (default 60), the IP is blocked for `block_seconds` (default 300). Blocked requests return `429 Too Many Requests`.
 
-- Configurable rate limits per IP
-- Burst allowance
-- Rate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`)
-
-## Authentication
-
-Authentication is not implemented in the MVP. The API is open to any client that can reach the configured port.
-
-Future authentication methods:
-
-- **API key**: `X-API-Key` header
-- **mTLS**: Client certificate authentication
-- **OAuth2**: Bearer token authentication (commercial edition)
-
-## CORS
-
-CORS is not configured in the MVP. Future versions will add configurable CORS for web dashboard access.
-
-## Pagination
-
-Pagination is not implemented in the MVP. The device list returns all devices. Future versions will add:
-
-- `page` and `per_page` query parameters
-- `Link` header for pagination navigation
+Set `max_failures = 0` to disable rate limiting.
 - `X-Total-Count` header for total result count

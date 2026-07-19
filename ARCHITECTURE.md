@@ -2,32 +2,44 @@
 
 ## High-Level Architecture
 
-EdgeShield is a **pipeline-based network monitoring appliance** with three concurrent stages connected by bounded mpsc channels. The architecture prioritizes bounded memory usage, clear ownership boundaries, and minimal shared state.
+EdgeShield is a **pipeline-based network monitoring appliance** with concurrent stages connected by bounded mpsc channels. The architecture prioritizes bounded memory usage, clear ownership boundaries, and minimal shared state.
 
 ```mermaid
 graph TB
     subgraph "OS Thread (blocking)"
-        CAP[Capture Thread<br/>pnet datalink::channel]
+        CAP[Capture Thread<br/>pcap]
     end
 
     subgraph "Tokio Runtime"
-        PIP[Pipeline Task<br/>decode → classify → update]
-        API[API Server Task<br/>Axum HTTP]
+        PIP[Pipeline Task<br/>decode → classify → fingerprint]
+        RULES[Rule Engine<br/>evaluate rules → emit alerts]
+        FANOUT[Notifier Fan-out<br/>ntfy + MQTT + webhook + email]
+        SCAN[Offline Scanner]
+        HIST[History Snapshot Task]
+        API[API Server<br/>Axum + auth + TLS + audit]
     end
 
     subgraph "Shared State"
-        STORE[(Device Store<br/>Arc&lt;dyn DeviceStore&gt;)]
+        STORE[(Device Store)]
+        ALERTS[(Alert Store)]
+        HISTORY[(History Store)]
     end
 
-    CAP -->|mpsc::channel<br/>PacketBuf| PIP
-    PIP -->|mpsc::channel<br/>DiscoveryEvent| API
+    CAP -->|mpsc<br/>PacketBuf| PIP
+    PIP -->|mpsc<br/>DiscoveryEvent| RULES
+    RULES -->|mpsc<br/>Alert| FANOUT
+    SCAN -->|DeviceOffline| RULES
+    HIST --> STORE
     PIP --> STORE
+    RULES --> ALERTS
     API --> STORE
+    API --> ALERTS
+    API --> HISTORY
 ```
 
 ### Stage 1: Capture Thread
 
-A dedicated OS thread reads raw Ethernet frames from a network interface using `pnet::datalink::channel`. This runs on a blocking OS thread because `pnet`'s datalink API is synchronous and blocking.
+A dedicated OS thread reads raw Ethernet frames from a network interface using `pcap`. This runs on a blocking OS thread because pcap's API is synchronous and blocking.
 
 - **Buffer model**: Each captured frame is converted from `Vec<u8>` to `bytes::Bytes` (refcounted, `'static` slice) and wrapped in a `PacketBuf` struct.
 - **Backpressure**: The mpsc channel between capture and pipeline is bounded. When the channel is full, packets are dropped at the capture level. This is intentional — the system degrades gracefully under load rather than unboundedly growing memory.
@@ -37,13 +49,21 @@ A dedicated OS thread reads raw Ethernet frames from a network interface using `
 
 A tokio async task receives `PacketBuf` values from the capture channel and runs them through three sequential stages:
 
-1. **Decode** (`edgeshield-packet`): Parses Ethernet, IPv4, and transport-layer headers. Header fields are copied into owned structs (they are small — MAC addresses are 6 bytes, IP addresses are 4-16 bytes, ports are 2 bytes). The payload is referenced via a borrow into the `PacketBuf`.
-2. **Classify** (`edgeshield-protocol`): Pure function that maps decoded headers to a `Protocol` enum variant. No I/O, no state, no allocation.
-3. **Update** (`edgeshield-discovery`): Reads or creates `Device` records in the store, updates counters and protocol sets, and emits `DiscoveryEvent` values on the event channel.
+1. **Decode** (`edgeshield-packet`): Parses Ethernet, IPv4, and transport-layer headers. Header fields are copied into owned structs. The payload is referenced via a borrow into the `PacketBuf`.
+2. **Classify** (`edgeshield-protocol`): Pure function that maps decoded headers to a `Protocol` enum variant. Also extracts DHCP hostnames, mDNS service names, and NTP headers. HTTP banner sniffing catches HTTP on non-standard ports.
+3. **Update** (`edgeshield-discovery`): Reads or creates `Device` records in the store, updates counters and protocol sets, populates vendor (OUI), hostname (DHCP/mDNS), and DHCP vendor class. Emits `DiscoveryEvent` values on the event channel.
 
-### Stage 3: API Server Task
+### Stage 3: Rule Engine
 
-A tokio async task runs an Axum HTTP server. It shares the `DeviceStore` with the pipeline via `Arc<dyn DeviceStore>`. The event channel from the pipeline is available for future WebSocket push.
+A tokio async task consumes `DiscoveryEvent`s, evaluates user-configured rules, and emits `Alert`s. Supports five condition types (new_device, new_device_by_vendor, new_device_by_mac_prefix, device_offline, protocol_change) with per-device per-rule cooldown and acknowledgment suppression. Alerts are persisted to the `AlertStore` before delivery.
+
+### Stage 4: Notifier Fan-out
+
+A tokio async task delivers each alert to all configured notifiers (ntfy, MQTT, webhook, email) simultaneously. Each notifier implements the `Notifier` trait. A slow notifier doesn't block others.
+
+### Stage 5: API Server
+
+A tokio async task runs an Axum HTTP server with optional Bearer token authentication (SHA-256 hashed keys, constant-time comparison, per-IP rate limiting), TLS (rustls), and audit logging. Shares the `DeviceStore`, `AlertStore`, and `HistoryStore` via `Arc<dyn ...>`.
 
 ## Core Subsystems
 
@@ -51,83 +71,83 @@ A tokio async task runs an Axum HTTP server. It shares the `DeviceStore` with th
 
 Foundation crate with zero workspace dependencies. Defines:
 
-- `Device` — the central data model (MAC, IPs, hostname, timestamps, counters, protocols)
-- `Protocol` — enum of detected protocols (ARP, IPv4, ICMP, TCP, UDP, DNS, Other)
+- `Device` — the central data model (MAC, IPs, hostname, vendor, DHCP vendor class, timestamps, counters, protocols, per-protocol stats)
+- `Protocol` — enum of detected protocols (ARP, IPv4, ICMP, TCP, UDP, DNS, DHCP, HTTP, HTTPS, mDNS, NTP, Other)
+- `Alert`, `Severity`, `AlertEventType` — alert types for the rule engine
+- `AlertStore`, `DeviceHistoryStore` traits — storage abstractions
 - `Timestamp` — ISO 8601 UTC timestamp newtype
-- Error types for every subsystem (`PacketError`, `ConfigError`, `StorageError`, `ApiError`)
+- Error types for every subsystem
 
 ### `edgeshield-config`
 
-Reads and validates TOML configuration. Uses `serde` for deserialization with sensible defaults. Validates that the interface name is non-empty at parse time.
+Reads and validates TOML configuration. Uses `serde` for deserialization with sensible defaults. Validates interface names, rule names, severity strings, API key hash formats, and TLS paths at parse time.
 
 ### `edgeshield-telemetry`
 
-Initializes the `tracing` subscriber with structured JSON output. Composes layers using `tracing-subscriber`'s `Registry`:
-
-- `EnvFilter` for runtime log level control
-- `fmt::layer().json()` for structured JSON output with file, line, span, and target metadata
+Initializes the `tracing` subscriber with structured JSON output.
 
 ### `edgeshield-packet`
 
-Owns the packet buffer lifecycle. Two modules:
-
-- `capture`: `CaptureSession` — manages the OS thread, pnet channel, and mpsc bridge. `PacketBuf` — refcounted packet buffer with zero-copy sharing.
-- `decode`: `DecodedPacket` — owned header fields with a borrowed payload reference. Parses Ethernet, IPv4, TCP, UDP, ICMP, and ARP.
+Owns the packet buffer lifecycle. `CaptureSession` manages the OS thread, pcap channel, and mpsc bridge. `PacketBuf` is a refcounted packet buffer with zero-copy sharing. `decode` parses Ethernet, IPv4, TCP, UDP, ICMP, and ARP headers.
 
 ### `edgeshield-protocol`
 
-Pure protocol classification. The `classify()` function takes a `DecodedPacket` reference and returns a `Protocol` variant. Classification logic:
-
-1. EtherType `0x0806` → ARP
-2. EtherType `0x0800` + IP protocol 6 (TCP) → TCP (or DNS if port 53)
-3. EtherType `0x0800` + IP protocol 17 (UDP) → UDP (or DNS if port 53)
-4. EtherType `0x0800` + IP protocol 1 (ICMP) → ICMP
-5. EtherType `0x0800` + no transport → IPv4
-6. Anything else → `Other(n)`
+Pure protocol classification and payload parsing. The `classify()` function maps decoded headers to a `Protocol` variant. Includes parsers for DHCP (hostname + vendor class), mDNS (SRV/PTR records with DNS compression), NTP (header validation), and HTTP banner sniffing.
 
 ### `edgeshield-storage`
 
-Defines the `DeviceStore` trait and provides an in-memory implementation backed by `DashMap`. The trait is the abstraction boundary between discovery and persistence.
+Defines the `DeviceStore` trait and provides three SQLite-backed stores:
+- `SqliteStore` — device inventory (UPSERT on every packet)
+- `SqliteAlertStore` — alert history (append-mostly, queryable via API)
+- `SqliteHistoryStore` — daily device snapshots (UNIQUE(mac, snapshot_date) upsert)
 
-```rust
-pub trait DeviceStore: Send + Sync {
-    fn get(&self, mac: &MacAddress) -> Result<Option<Device>, StorageError>;
-    fn upsert(&self, device: Device) -> Result<(), StorageError>;
-    fn list(&self) -> Result<Vec<Device>, StorageError>;
-    fn count(&self) -> Result<usize, StorageError>;
-}
-```
+All share the same SQLite database file. Schema migrations are idempotent (`ALTER TABLE ADD COLUMN` with duplicate-column error suppression).
 
 ### `edgeshield-discovery`
 
-The `DiscoveryEngine` is the stateful core. It holds an `Arc<dyn DeviceStore>` and an event sender. The `process_packet()` method runs the full decode-classify-update pipeline for a single packet.
+The `DiscoveryEngine` is the stateful core. It holds an `Arc<dyn DeviceStore>` and an event sender. The `process_packet()` method runs the full decode-classify-fingerprint-update pipeline for a single packet. Also emits `DeviceOffline` events from the background scanner.
+
+### `edgeshield-rules`
+
+The rule engine. `RuleEngine` consumes `DiscoveryEvent`s, evaluates rules, and emits `Alert`s. Includes the `AlertStore` trait (implemented by `InMemoryAlertStore` for tests and `SqliteAlertStore` for production), `AlertFilter`, and a config bridge that converts `RuleConfig` to runtime `Rule` objects.
 
 ### `edgeshield-notify`
 
-MQTT notification delivery. Consumes `DiscoveryEvent`s from the discovery engine and publishes new-device events as JSON to an MQTT broker. Disabled by default; enabled by the `[mqtt]` config table. The notifier owns the event receiver — the API no longer holds it. This keeps notification (outbound) separate from the API (inbound).
+Notification delivery. The `NotifierFanout` dispatches alerts to all configured notifiers simultaneously. Each notifier implements the `Notifier` trait:
+- `NtfyNotifier` — HTTP POST to ntfy.sh
+- `MqttNotifier` — MQTT publish
+- `WebhookNotifier` — HTTP POST (Slack/Discord/Teams-compatible)
+- `EmailNotifier` — SMTP via lettre
 
 ### `edgeshield-api`
 
-Axum-based REST API with four endpoints. `AppState` holds the shared store and event receiver. Route handlers are standalone functions for testability.
+Axum-based REST API with 10 endpoints. Includes Bearer token authentication (`auth.rs`), audit logging (`audit.rs`), and TLS support via `axum-server` + `rustls`. `AppState` holds the shared stores, auth state, and audit logger.
 
 ### `edgeshield-daemon`
 
 The orchestrator. Wires together all subsystems in the `run()` function:
 
 1. Initialize telemetry
-2. Create the device store — `MemoryStore` (DashMap) when `database_path` is empty, otherwise `SqliteStore` backed by the configured SQLite file. Both implement the `DeviceStore` trait and are shared as `Arc<dyn DeviceStore>`.
-3. Create event channel
-4. Create `DiscoveryEngine`
-5. Start the MQTT notifier (if `[mqtt]` is configured) — owns the event receiver
-6. Start `CaptureSession`
-7. Spawn API server task
-8. Spawn pipeline task
-9. Wait for `SIGINT`/`SIGTERM`
-10. Graceful shutdown
+2. Create the device store (SQLite or in-memory)
+3. Create the event channel (discovery → rule engine)
+4. Create the discovery engine
+5. Build rules from config (default `new_device` rule if none configured)
+6. Create the alert store (SQLite or in-memory)
+7. Create the alert channel (rule engine → notifier fanout)
+8. Start the rule engine
+9. Build the notifier list from config
+10. Start the notifier fanout
+11. Start the offline scanner
+12. Start the history snapshot task
+13. Start the API server (with auth, TLS, audit)
+14. Start packet capture
+15. Spawn pipeline task
+16. Wait for `SIGINT`/`SIGTERM`
+17. Graceful shutdown
 
 ### `edgeshield-cli`
 
-Binary entry point with `clap` argument parsing. Two subcommands: `run` and `default-config`.
+Binary entry point with `clap` argument parsing. Subcommands: `run`, `default-config`, `completions`.
 
 ## Layered Architecture
 

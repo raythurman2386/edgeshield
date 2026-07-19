@@ -2,32 +2,49 @@
 
 ## Overview
 
-EdgeShield is a passive network security monitoring appliance organized as a pipeline of concurrent stages. The system runs on a single process with one OS thread and a tokio async runtime, sharing state through a lock-free concurrent hash map.
+EdgeShield is a passive network security monitoring appliance organized as a pipeline of concurrent stages. The system runs on a single process with one OS thread for packet capture and a tokio async runtime for the pipeline, rule engine, notifiers, and API server.
 
 ```mermaid
 graph TB
     subgraph "Process Boundary"
         subgraph "OS Thread (blocking)"
-            CAP[Capture Thread<br/>pnet datalink]
+            CAP[Capture Thread<br/>pcap]
         end
 
         subgraph "Tokio Runtime"
-            PIP[Pipeline Task]
-            API[API Server<br/>Axum]
+            PIP[Pipeline Task<br/>decode + classify + fingerprint]
+            RULES[Rule Engine<br/>evaluate rules + emit alerts]
+            FANOUT[Notifier Fan-out<br/>ntfy + MQTT + webhook + email]
+            SCAN[Offline Scanner<br/>background task]
+            HIST[History Snapshot Task<br/>daily snapshots + retention]
+            API[API Server<br/>Axum + auth + TLS + audit]
         end
 
         subgraph "Shared State"
-            STORE[(DashMap<br/>Device Store)]
+            STORE[(Device Store<br/>DashMap or SQLite)]
+            ALERTS[(Alert Store<br/>SQLite or in-memory)]
+            HISTORY[(History Store<br/>SQLite)]
         end
 
         CAP -->|bounded mpsc<br/>PacketBuf| PIP
-        PIP -->|bounded mpsc<br/>DiscoveryEvent| API
+        PIP -->|bounded mpsc<br/>DiscoveryEvent| RULES
+        RULES -->|bounded mpsc<br/>Alert| FANOUT
         PIP -->|read/write| STORE
+        RULES -->|write| ALERTS
+        SCAN -->|DeviceOffline events| RULES
+        HIST -->|read| STORE
+        HIST -->|write| HISTORY
         API -->|read| STORE
+        API -->|read/write| ALERTS
+        API -->|read| HISTORY
     end
 
-    NIC[Network Interface<br/>promiscuous mode] -->|raw frames| CAP
-    CLIENT[HTTP Client] -->|HTTP/1.1| API
+    NIC[Network Interface<br/>promisc(false)] -->|raw frames| CAP
+    CLIENT[HTTP Client] -->|HTTP/HTTPS| API
+    NTFY[ntfy.sh] -.->|POST| FANOUT
+    MQTT[MQTT Broker] -.->|publish| FANOUT
+    WEBHOOK[Slack/Discord] -.->|POST| FANOUT
+    EMAIL[SMTP Server] -.->|email| FANOUT
 ```
 
 ## Design Constraints

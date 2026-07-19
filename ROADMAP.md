@@ -215,13 +215,10 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 These are explicitly out of scope to prevent feature creep:
 
 - ❌ Cloud dashboard / SaaS offering
-- ❌ Deep packet inspection (DPI) / content filtering
-- ❌ Intrusion prevention (IPS) — blocking traffic
 - ❌ VPN / firewall functionality
 - ❌ NetFlow / IPFIX export
 - ❌ SNMP support
 - ❌ Windows support
-- ❌ Machine learning / anomaly detection
 - ❌ Packet capture to PCAP files (use `tcpdump`)
 - ❌ Active scanning / ARP spoof detection
 

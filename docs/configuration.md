@@ -49,11 +49,33 @@ The port for the REST API HTTP server.
 api_port = 8080
 ```
 
-The API server binds to `0.0.0.0`. In production, consider:
+### `api_bind_address` (optional)
 
-- Binding to `127.0.0.1` and using a reverse proxy (future feature)
-- Using a firewall to restrict access to the API port
-- Changing the port to avoid conflicts with other services
+The address to bind the REST API server to.
+
+- **Type**: string
+- **Required**: no
+- **Default**: `"0.0.0.0"` (all interfaces)
+
+```toml
+api_bind_address = "127.0.0.1"
+```
+
+Set to `127.0.0.1` to restrict API access to local processes only. This is recommended when using a reverse proxy or when no API authentication is configured. When binding to a non-loopback address without authentication, EdgeShield logs a warning at startup.
+
+### `database_path` (optional)
+
+Path to the SQLite database file. Used for device storage, alert history, and device history snapshots.
+
+- **Type**: string
+- **Required**: no
+- **Default**: `""` (in-memory only — data lost on restart)
+
+```toml
+database_path = "/var/lib/edgeshield/edgeshield.db"
+```
+
+When empty, all data is in-memory and lost on restart. When set, devices, alerts, and daily history snapshots persist across restarts.
 
 ### `log_level` (optional)
 
@@ -224,6 +246,196 @@ The ntfy `Title` header is set to a human-readable summary (`New device: <hostna
 
 The token is read from the config file in plaintext. For production, prefer a public topic on a trusted ntfy instance, or run EdgeShield under systemd with `LoadCredential=` and a config that reads the token from a protected path. Do not commit credentials to version control.
 
+### `[webhook]` (optional)
+
+Webhook notification settings. When present, EdgeShield POSTs each alert as JSON to the configured URL. Compatible with Slack, Discord, Microsoft Teams, and any generic webhook that accepts a JSON POST body.
+
+```toml
+[webhook]
+url = "https://hooks.slack.com/services/..."
+# token = "bearer-token"           # optional Bearer auth
+# headers = { "X-Custom" = "value" } # optional custom headers
+# timeout_seconds = 10             # request timeout (default 10)
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | (required) | Webhook URL |
+| `token` | string | none | Optional Bearer token (`Authorization: Bearer <token>`) |
+| `headers` | map | none | Optional custom HTTP headers |
+| `timeout_seconds` | integer | `10` | Request timeout |
+
+### `[email]` (optional)
+
+Email notification settings via SMTP. Sends each alert as a plain-text email. Uses the `lettre` crate — no local MTA required.
+
+```toml
+[email]
+host = "smtp.gmail.com"
+port = 587
+username = "you@gmail.com"
+password = "app-password"
+from = "edgeshield@home.lan"
+to = "you@home.lan"
+# starttls = true              # default true (STARTTLS on port 587)
+# subject_prefix = "[EdgeShield]" # default
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | (required) | SMTP server hostname |
+| `port` | integer | `587` | SMTP port (587 for STARTTLS, 465 for implicit TLS) |
+| `username` | string | (required) | SMTP username |
+| `password` | string | (required) | SMTP password (use an app-specific password for Gmail) |
+| `from` | string | (required) | From email address |
+| `to` | string | (required) | To email address (recipient) |
+| `starttls` | boolean | `true` | Use STARTTLS (port 587) vs implicit TLS (port 465) |
+| `subject_prefix` | string | `"[EdgeShield]"` | Subject prefix for alert emails |
+
+### `[[rules]]` (optional)
+
+Alerting rules. Each rule defines a condition, severity, and cooldown. When the rule engine matches a condition against a discovery event, it produces an alert that is delivered to all configured notifiers.
+
+If no rules are configured, a default `new_device` rule runs (preserving the pre-Phase-5 behavior — every new MAC triggers an alert).
+
+```toml
+[[rules]]
+name = "new-device-alert"
+condition = "new_device"
+severity = "info"
+cooldown_seconds = 300
+
+[[rules]]
+name = "new-iot-device"
+condition = { new_device_by_vendor = "TP-Link" }
+severity = "warning"
+
+[[rules]]
+name = "new-apple-device"
+condition = { new_device_by_mac_prefix = "8C:85:90" }
+severity = "info"
+
+[[rules]]
+name = "device-offline-30min"
+condition = { device_offline = { after_seconds = 1800 } }
+severity = "warning"
+cooldown_seconds = 3600
+
+[[rules]]
+name = "protocol-change"
+condition = "protocol_change"
+severity = "info"
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | (required) | Human-readable rule name (shown in alerts) |
+| `enabled` | boolean | `true` | Whether the rule is active |
+| `condition` | string or table | (required) | The condition that triggers the rule (see below) |
+| `severity` | string | `"info"` | `info`, `warning`, or `critical` |
+| `cooldown_seconds` | integer | `0` | Min seconds between alerts for the same device (0 = no cooldown) |
+
+#### Conditions
+
+| Condition | Format | Description |
+|-----------|--------|-------------|
+| `new_device` | `"new_device"` | Fires for every new MAC address |
+| `new_device_by_vendor` | `{ new_device_by_vendor = "TP-Link" }` | Fires for a new device whose OUI vendor matches (case-insensitive substring) |
+| `new_device_by_mac_prefix` | `{ new_device_by_mac_prefix = "8C:85:90" }` | Fires for a new device whose MAC starts with the prefix (case-insensitive) |
+| `device_offline` | `{ device_offline = { after_seconds = 1800 } }` | Fires when a known device has been silent for N seconds |
+| `protocol_change` | `"protocol_change"` | Fires when a device starts using a new protocol |
+
+### `[scanner]` (optional)
+
+Background scanner settings for device-offline detection. The scanner wakes periodically, lists all devices, and emits `DeviceOffline` events for devices that have been silent longer than 60 seconds.
+
+```toml
+[scanner]
+interval_seconds = 60  # default 60; set to 0 to disable
+```
+
+### `[storage]` (optional)
+
+Device history snapshot and retention settings.
+
+```toml
+[storage]
+history_snapshot_hours = 24   # default 24; set to 0 to disable
+history_retention_days = 90   # default 90; set to 0 to keep forever
+```
+
+### `[api.auth]` (optional)
+
+API key authentication. When present, all endpoints except `/health` require a valid Bearer token. Keys are stored as SHA-256 hashes — never store the plaintext key in the config.
+
+```bash
+# Generate a key
+KEY=$(openssl rand -hex 32)
+echo "Your API key: $KEY"
+
+# Hash it for the config
+echo -n "$KEY" | sha256sum
+# → a1b2c3d4...  (64 hex chars)
+```
+
+```toml
+[api.auth]
+read_key_hash = "a1b2c3d4..."   # SHA-256 hex of the read key (required)
+admin_key_hash = "d4e5f6..."    # SHA-256 hex of the admin key (optional)
+max_failures = 10               # rate limit: max failed attempts per IP (default 10, 0 = disabled)
+window_seconds = 60             # rate limit: window for counting failures (default 60)
+block_seconds = 300             # rate limit: how long to block an IP (default 300)
+```
+
+#### Permission levels
+
+| Key | GET endpoints | POST/DELETE endpoints |
+|-----|---------------|----------------------|
+| Read key | ✅ | ❌ (403 Forbidden) |
+| Admin key | ✅ | ✅ |
+| Single-key mode (no admin key) | ✅ | ✅ (read key grants admin) |
+
+`/health` is always exempt from authentication.
+
+### `[api.tls]` (optional)
+
+TLS settings for the API server. When present, the API uses HTTPS via `rustls` (pure Rust, no OpenSSL).
+
+```toml
+[api.tls]
+cert_path = "/etc/edgeshield/cert.pem"
+key_path = "/etc/edgeshield/key.pem"
+```
+
+Generate a self-signed certificate:
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=edgeshield"
+```
+
+### `[api.audit]` (optional)
+
+Audit logging. When present, all API requests (except `/health`) are logged to a file in JSON-lines format.
+
+```toml
+[api.audit]
+log_path = "/var/log/edgeshield/audit.log"
+```
+
+Each audit entry is a JSON object:
+
+```json
+{"timestamp":"2026-07-19T15:00:00.123Z","method":"GET","path":"/devices","status":200,"key_prefix":"a1b2","duration_ms":3}
+```
+
+The `key_prefix` field is the first 4 hex characters of the SHA-256 hash of the key used — enough to identify which key was used without revealing it.
+
 ---
 
 ## Complete Example
@@ -234,61 +446,76 @@ The token is read from the config file in plaintext. For production, prefer a pu
 interface = "eth0"
 ```
 
-### Full configuration with defaults
+### Full configuration with all options
 
 ```toml
-interface       = "eth0"
-api_port        = 8080
-log_level       = "info"
-capture_buffer  = 4096
+interface         = "eth0"
+api_bind_address  = "127.0.0.1"
+api_port          = 8080
+log_level         = "info"
+capture_buffer    = 4096
+database_path     = "/var/lib/edgeshield/edgeshield.db"
 ```
 
-### Configuration with MQTT alerting
+### Production configuration with alerting and security
 
 ```toml
-interface       = "eth0"
-api_port        = 8080
-log_level       = "info"
-capture_buffer  = 4096
+interface         = "wlan0"
+api_bind_address  = "0.0.0.0"
+api_port          = 8080
+log_level         = "warn"
+capture_buffer    = 16384
+database_path     = "/var/lib/edgeshield/edgeshield.db"
 
-[mqtt]
-host = "homeassistant.local"
-port = 1883
-topic = "edgeshield/devices/new"
-client_id = "edgeshield"
-qos = 1
-```
+# Alerting rules
+[[rules]]
+name = "new-device-alert"
+condition = "new_device"
+severity = "info"
+cooldown_seconds = 300
 
-### Configuration with ntfy alerting
+[[rules]]
+name = "device-offline-30min"
+condition = { device_offline = { after_seconds = 1800 } }
+severity = "warning"
+cooldown_seconds = 3600
 
-```toml
-interface       = "wlan0"
-api_port        = 0
-log_level       = "info"
-capture_buffer  = 4096
-database_path   = "/var/lib/edgeshield/edgeshield.db"
-
+# Notification channels (all run simultaneously)
 [ntfy]
 base_url = "https://ntfy.sh"
 topic = "edgeshield"
-```
 
-### Development configuration
+[webhook]
+url = "https://hooks.slack.com/services/..."
 
-```toml
-interface       = "eth0"
-api_port        = 9090
-log_level       = "debug"
-capture_buffer  = 1024
-```
+[email]
+host = "smtp.gmail.com"
+port = 587
+username = "you@gmail.com"
+password = "app-password"
+from = "edgeshield@home.lan"
+to = "you@home.lan"
 
-### Production configuration
+# API security
+[api.auth]
+read_key_hash = "sha256-hex-of-your-read-key"
+admin_key_hash = "sha256-hex-of-your-admin-key"
 
-```toml
-interface       = "eth0"
-api_port        = 8080
-log_level       = "warn"
-capture_buffer  = 16384
+[api.tls]
+cert_path = "/etc/edgeshield/cert.pem"
+key_path = "/etc/edgeshield/key.pem"
+
+[api.audit]
+log_path = "/var/log/edgeshield/audit.log"
+
+# Device history
+[storage]
+history_snapshot_hours = 24
+history_retention_days = 90
+
+# Offline scanner
+[scanner]
+interval_seconds = 60
 ```
 
 ---
@@ -301,45 +528,6 @@ The following environment variables override configuration file values:
 |----------|-----------|---------|
 | `RUST_LOG` | `log_level` (with per-module support) | `RUST_LOG=debug` |
 | `EDGESHIELD_CONFIG` | Config file path | `EDGESHIELD_CONFIG=/custom/path/config.toml` |
-
----
-
-## Future Configuration Options
-
-The following options are planned for future releases:
-
-```toml
-[api]
-bind_address = "127.0.0.1"
-tls_certificate = "/etc/edgeshield/cert.pem"
-tls_key = "/etc/edgeshield/key.pem"
-cors_origins = ["https://dashboard.example.com"]
-
-[api.auth]
-mode = "api-key"
-# api_key = "..."  # Stored as SHA-256 hash
-
-[storage]
-backend = "sqlite"
-path = "/var/lib/edgeshield/edgeshield.db"
-
-[storage.retention]
-events_days = 7
-metrics_days = 30
-alerts_days = 90
-
-[rules]
-enabled = ["new-device", "protocol-change", "volume-spike"]
-
-[rules.volume-spike]
-threshold_multiplier = 10
-window_minutes = 5
-cooldown_minutes = 30
-
-[logging]
-format = "json"  # or "pretty" for development
-correlation_id = true
-```
 
 ---
 
