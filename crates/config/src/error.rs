@@ -15,4 +15,10 @@ pub enum ConfigError {
 
     #[error("invalid interface '{0}': interface name cannot be empty")]
     EmptyInterface(String),
+
+    #[error("invalid MQTT config: host cannot be empty")]
+    EmptyMqttHost,
+
+    #[error("invalid MQTT QoS {0}: must be 0, 1, or 2")]
+    InvalidMqttQos(u8),
 }

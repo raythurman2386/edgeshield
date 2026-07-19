@@ -6,10 +6,8 @@
 use std::sync::Arc;
 
 use axum::Router;
-use tokio::sync::mpsc;
 use tracing::info;
 
-use edgeshield_discovery::discovery::DiscoveryEvent;
 use edgeshield_storage::store::DeviceStore;
 
 use crate::routes;
@@ -19,8 +17,6 @@ use crate::routes;
 pub struct AppState {
     /// The device store (shared with the discovery engine).
     pub store: Arc<dyn DeviceStore>,
-    /// Receiver for discovery events (for future WebSocket push).
-    pub event_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<DiscoveryEvent>>>,
 }
 
 /// Start the REST API server.
@@ -29,23 +25,18 @@ pub struct AppState {
 ///
 /// * `port` - The port to listen on
 /// * `store` - The shared device store
-/// * `event_rx` - Receiver for discovery events
 ///
 /// # Design
 ///
 /// The API server runs on a separate tokio task from the capture pipeline.
 /// It shares the device store via `Arc<dyn DeviceStore>`, which is lock-free
-/// for reads (DashMap). The event channel allows future WebSocket push
-/// without changing the architecture.
+/// for reads (DashMap). Discovery events are consumed by the notifier
+/// crate (MQTT publisher), not by the API.
 pub async fn serve(
     port: u16,
     store: Arc<dyn DeviceStore>,
-    event_rx: mpsc::Receiver<DiscoveryEvent>,
 ) -> Result<(), anyhow::Error> {
-    let state = AppState {
-        store,
-        event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
-    };
+    let state = AppState { store };
 
     let app = Router::new()
         .route("/health", axum::routing::get(routes::health))
@@ -54,7 +45,7 @@ pub async fn serve(
         .route("/metrics", axum::routing::get(routes::metrics))
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{port}");
     info!(addr = %addr, "starting API server");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

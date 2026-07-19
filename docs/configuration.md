@@ -105,6 +105,73 @@ capture_buffer = 4096
 
 A larger buffer reduces packet drops during traffic bursts but uses more memory. Each buffer slot holds one `PacketBuf` (typically ~1514 bytes for a full Ethernet frame). A buffer of 4096 uses approximately 6 MB of memory for the channel.
 
+### `[mqtt]` (optional)
+
+MQTT notification settings. When present, EdgeShield publishes a JSON event to the configured broker every time a **new device** is discovered on the network. When absent, MQTT is disabled and EdgeShield behaves as before.
+
+This is the feature that makes EdgeShield worth running on a homelab network: pair it with Home Assistant or Node-RED to get an alert the moment an unknown device joins your network.
+
+- **Type**: table
+- **Required**: no
+- **Default**: absent (MQTT disabled)
+
+```toml
+[mqtt]
+host = "homeassistant.local"
+port = 1883
+topic = "edgeshield/devices/new"
+client_id = "edgeshield"
+# username = "edgeshield"
+# password = "secret"
+qos = 1
+```
+
+#### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | (required) | Broker hostname or IP |
+| `port` | integer | `1883` | Broker port (8883 for TLS — not yet supported) |
+| `topic` | string | `"edgeshield/devices/new"` | Topic to publish new-device events to |
+| `client_id` | string | `"edgeshield"` | MQTT client ID (unique per broker) |
+| `username` | string | none | Optional broker username |
+| `password` | string | none | Optional broker password |
+| `qos` | integer | `1` | QoS level (0, 1, or 2) |
+
+#### Published message format
+
+Each new-device event is published as a JSON object:
+
+```json
+{
+  "event": "new_device",
+  "mac": "00:11:22:33:44:55",
+  "ip": "192.168.1.10",
+  "hostname": "living-room-plug",
+  "protocol": "TCP",
+  "first_seen": "2026-07-18T12:00:00.000Z"
+}
+```
+
+Fields are additive only — never renamed or removed without a topic version bump. `ip` and `hostname` are `null` if not yet observed.
+
+#### Home Assistant example
+
+Add an MQTT sensor in `configuration.yaml`:
+
+```yaml
+mqtt:
+  sensor:
+    - name: "EdgeShield New Device"
+      state_topic: "edgeshield/devices/new"
+      value_template: "{{ value_json.mac }}"
+      json_attributes_topic: "edgeshield/devices/new"
+```
+
+#### Security
+
+The password is read from the config file in plaintext. For production, prefer a broker that accepts anonymous clients on a trusted VLAN, or run EdgeShield under systemd with `LoadCredential=` and a config that reads the password from a protected path. Do not commit credentials to version control.
+
 ---
 
 ## Complete Example
@@ -122,6 +189,22 @@ interface       = "eth0"
 api_port        = 8080
 log_level       = "info"
 capture_buffer  = 4096
+```
+
+### Configuration with MQTT alerting
+
+```toml
+interface       = "eth0"
+api_port        = 8080
+log_level       = "info"
+capture_buffer  = 4096
+
+[mqtt]
+host = "homeassistant.local"
+port = 1883
+topic = "edgeshield/devices/new"
+client_id = "edgeshield"
+qos = 1
 ```
 
 ### Development configuration

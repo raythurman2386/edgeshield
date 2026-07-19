@@ -15,6 +15,7 @@ edgeshield-protocol = { path = "../protocol" }
 edgeshield-discovery = { path = "../discovery" }
 edgeshield-storage = { path = "../storage" }
 edgeshield-api = { path = "../api" }
+edgeshield-notify = { path = "../notify" }
 
 [dev-dependencies]
 mac_address.workspace = true

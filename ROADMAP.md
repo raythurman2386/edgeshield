@@ -1,8 +1,8 @@
 # EdgeShield ROADMAP
 
-> **Status**: MVP Phase (Phase 1 complete)
+> **Status**: Phase 4 (Protocol Depth + Device Fingerprinting)
 > **Version**: 0.1.0
-> **Last updated**: 2026-07-19
+> **Last updated**: 2026-07-18
 
 ---
 
@@ -82,37 +82,45 @@
 
 ---
 
-## Phase 4: Protocol Depth ⬜
+## Phase 4: Protocol Depth & Device Fingerprinting 🔄
 
-**Goal**: Detect application-layer protocols beyond port heuristics.
+**Goal**: Detect application-layer protocols beyond port heuristics, and enrich device records with vendor and hostname so alerts are actionable.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| DHCP detection (hostname extraction) | P0 | 2 days | — |
-| HTTP request/response detection | P1 | 3 days | — |
-| mDNS / Bonjour detection | P1 | 2 days | — |
-| NTP detection | P2 | 0.5 day | — |
-| DHCP fingerprint (vendor class) | P2 | 2 days | — |
-| Protocol statistics per device | P1 | 1 day | — |
+Device fingerprinting is what makes new-device alerts useful. "New device: 00:11:22:33:44:55" is noise; "New device: TP-Link Smart Plug (living-room-plug)" is actionable. The data sources (DHCP hostname, MAC OUI, mDNS service name) are already captured or classified — this phase stitches them together.
 
-**Exit criteria**: A device doing DHCP gets its hostname populated. HTTP servers are identified by port + banner.
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| DHCP detection (hostname extraction) | P0 | 2 days | — | ✅ Delivered (Phase 1 classifier + discovery wiring) |
+| HTTP request/response detection | P1 | 3 days | — | ⬜ |
+| mDNS / Bonjour detection | P1 | 2 days | — | ⬜ |
+| NTP detection | P2 | 0.5 day | — | ⬜ |
+| DHCP fingerprint (vendor class) | P2 | 2 days | — | ⬜ |
+| Protocol statistics per device | P1 | 1 day | — | ⬜ |
+| **MAC OUI vendor lookup** | P0 | 1 day | — | ⬜ Next |
+| **Device fingerprint combiner** (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields) | P0 | 1 day | OUI lookup | ⬜ Next |
+| **Enrich MQTT payload with vendor** | P1 | 0.5 day | fingerprint combiner | ⬜ Next |
+
+**Exit criteria**: A device doing DHCP gets its hostname populated. A new-device MQTT alert includes the vendor name. HTTP servers are identified by port + banner.
 
 ---
 
-## Phase 5: Alerting & Rules ⬜
+## Phase 5: Alerting & Rules 🔄
 
 **Goal**: User-configurable rules that trigger on network events.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| Rule engine (TOML rules file) | P0 | 3 days | — |
-| Built-in rules (new device, known device offline) | P0 | 1 day | rule engine |
-| Webhook notification channel | P0 | 2 days | rule engine |
-| Email notification channel (sendmail) | P1 | 2 days | rule engine |
-| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine |
-| Rate-limited alerts (debounce) | P1 | 1 day | — |
+**Partially delivered**: New-device alerting via MQTT shipped ahead of schedule (2026-07-18). The `edgeshield-notify` crate publishes a JSON event to an MQTT broker the moment an unknown MAC appears. This is the feature that makes EdgeShield worth running on a homelab — native Home Assistant / Node-RED integration. The remaining work is a general rule engine and additional notification channels.
 
-**Exit criteria**: Configure a rule that emails you when a new MAC appears. Configure another that webhooks when a known device goes silent for 30 min.
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| **MQTT new-device alerting** | P0 | 2 days | — | ✅ Delivered |
+| Rule engine (TOML rules file) | P0 | 3 days | — | ⬜ |
+| Built-in rules (new device, known device offline) | P0 | 1 day | rule engine | ⬜ |
+| Webhook notification channel | P0 | 2 days | rule engine | ⬜ |
+| Email notification channel (sendmail) | P1 | 2 days | rule engine | ⬜ |
+| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine | ⬜ |
+| Rate-limited alerts (debounce) | P1 | 1 day | — | ⬜ |
+
+**Exit criteria**: Configure a rule that emails you when a new MAC appears. Configure another that webhooks when a known device goes silent for 30 min. MQTT new-device alerts already work today.
 
 ---
 
@@ -216,4 +224,6 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 4: Protocol Depth** — DHCP hostname extraction, HTTP detection, mDNS/Bonjour.
+**Phase 4: Device Fingerprinting** — MAC OUI vendor lookup + fingerprint combiner (OUI + DHCP hostname + mDNS → `vendor`/`hostname` fields). This enriches new-device MQTT alerts so they say "TP-Link Smart Plug" instead of "00:11:22:33:44:55".
+
+**Just shipped**: MQTT new-device alerting (`edgeshield-notify` crate, 2026-07-18). See Phase 5 for details.

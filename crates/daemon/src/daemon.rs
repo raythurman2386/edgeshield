@@ -38,6 +38,7 @@ use tracing::{error, info, span, Level};
 use edgeshield_api::api;
 use edgeshield_config::config::Config;
 use edgeshield_discovery::discovery::{DiscoveryEngine, DiscoveryEvent};
+use edgeshield_notify::MqttNotifier;
 use edgeshield_packet::capture::CaptureSession;
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
@@ -76,19 +77,34 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     // 4. Create the discovery engine
     let engine = Arc::new(DiscoveryEngine::new(store.clone(), event_tx));
 
-    // 5. Start the API server
+    // 5. Start the notifier (if MQTT is configured)
+    //
+    // The notifier owns the event receiver. When MQTT is disabled,
+    // event_rx is dropped and the discovery engine's try_send calls
+    // silently fail — the pipeline is unaffected.
+    let notifier_handle = if let Some(mqtt_config) = config.mqtt.clone() {
+        let notifier = MqttNotifier::new(mqtt_config, event_rx);
+        Some(tokio::spawn(async move {
+            notifier.run().await;
+        }))
+    } else {
+        info!("MQTT notifications disabled (no [mqtt] config)");
+        None
+    };
+
+    // 6. Start the API server
     let api_store = store.clone();
     let api_handle = tokio::spawn(async move {
-        if let Err(e) = api::serve(config.api_port, api_store, event_rx).await {
+        if let Err(e) = api::serve(config.api_port, api_store).await {
             error!(error = %e, "API server error");
         }
     });
 
-    // 6. Start packet capture
+    // 7. Start packet capture
     let mut capture = CaptureSession::start(&config.interface, config.capture_buffer)?;
     info!("packet capture started");
 
-    // 7. Process packets in the pipeline
+    // 8. Process packets in the pipeline
     // Extract the receiver before spawning so we can still call capture.stop() later.
     let (_, closed_rx) = mpsc::channel::<edgeshield_packet::capture::PacketBuf>(1);
     let mut pipeline_rx = std::mem::replace(&mut capture.rx, closed_rx);
@@ -100,7 +116,7 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         info!("pipeline task finished");
     });
 
-    // 8. Wait for shutdown signal (SIGINT or SIGTERM)
+    // 9. Wait for shutdown signal (SIGINT or SIGTERM)
     info!("EdgeShield running. Press Ctrl+C to stop.");
 
     // Set up SIGTERM handler (Unix only)
@@ -117,11 +133,18 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         }
     }
 
-    // 9. Graceful shutdown
+    // 10. Graceful shutdown
     info!("shutting down");
     capture.stop();
     pipeline_handle.await?;
     api_handle.abort();
+    if let Some(handle) = notifier_handle {
+        // The notifier exits when event_tx is dropped, which happens when
+        // the discovery engine (and its event_tx) is dropped below. We
+        // abort rather than await because the notifier may be mid-publish
+        // to a slow broker and we don't want to block shutdown.
+        handle.abort();
+    }
 
     info!("EdgeShield stopped");
     Ok(())

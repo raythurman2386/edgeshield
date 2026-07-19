@@ -8,6 +8,7 @@ members = [
     "crates/protocol",
     "crates/storage",
     "crates/discovery",
+    "crates/notify",
     "crates/api",
     "crates/daemon",
     "crates/cli",
@@ -15,7 +16,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 authors = ["EdgeShield Contributors"]
 
@@ -47,6 +48,9 @@ bytes = "1"
 
 # Concurrency
 dashmap = "6"
+
+# MQTT (for new-device alerting)
+rumqttc = { version = "0.24", default-features = false }
 
 # Error handling
 anyhow = "1"

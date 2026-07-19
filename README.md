@@ -25,6 +25,7 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 - **Protocol classification** — detects ARP, IPv4, ICMP, TCP, UDP, and DNS traffic.
 - **Traffic profiling** — per-device packet counts, byte counters, and protocol fingerprints.
 - **Persistent storage** — SQLite backend so devices survive daemon restarts.
+- **New-device alerting** — publish an MQTT event the moment an unknown device joins your network. Native Home Assistant / Node-RED integration.
 - **REST API** — query device inventory, metrics, and health from any HTTP client.
 - **Structured JSON logging** — production-ready observability via `tracing`.
 - **Low memory footprint** — designed for Raspberry Pi Zero 2 W and similar constrained hardware.
@@ -94,6 +95,7 @@ edgeshield/
 │   ├── protocol/           # Protocol classification
 │   ├── storage/            # Device store trait + MemoryStore + SqliteStore
 │   ├── discovery/          # Device discovery engine
+│   ├── notify/             # MQTT new-device alerting
 │   ├── api/                # REST API (Axum)
 │   ├── daemon/             # Application orchestrator
 │   └── cli/                # CLI binary entry point
@@ -192,6 +194,13 @@ api_port        = 8080
 log_level       = "info"
 capture_buffer  = 4096
 database_path   = "/var/lib/edgeshield/devices.db"
+
+[mqtt]
+host = "homeassistant.local"
+port = 1883
+topic = "edgeshield/devices/new"
+client_id = "edgeshield"
+qos = 1
 ```
 
 ## Logging

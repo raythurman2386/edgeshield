@@ -84,11 +84,11 @@ pub async fn get_device(
     let mac_clean = mac.replace(':', "");
     let bytes: [u8; 6] = hex::decode(&mac_clean)
         .map_err(|_| {
-            (StatusCode::BAD_REQUEST, format!("invalid MAC address: {}", mac_orig))
+            (StatusCode::BAD_REQUEST, format!("invalid MAC address: {mac_orig}"))
         })?
         .try_into()
         .map_err(|_| {
-            (StatusCode::BAD_REQUEST, format!("invalid MAC address length: {}", mac_orig))
+            (StatusCode::BAD_REQUEST, format!("invalid MAC address length: {mac_orig}"))
         })?;
     let mac = MacAddress::new(bytes);
 
@@ -96,7 +96,7 @@ pub async fn get_device(
         Ok(Some(device)) => Ok(Json(device)),
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
-            format!("device not found: {}", mac),
+            format!("device not found: {mac}"),
         )),
         Err(e) => {
             tracing::error!(error = %e, "failed to get device");
@@ -151,12 +151,10 @@ mod tests {
     use edgeshield_storage::store::DeviceStore;
     use std::str::FromStr;
     use std::sync::Arc;
-    use tokio::sync::mpsc;
     use tower::ServiceExt;
 
     fn test_app() -> Router {
         let store = Arc::new(MemoryStore::new()) as Arc<dyn DeviceStore>;
-        let (_event_tx, event_rx) = mpsc::channel(100);
 
         // Add a test device
         let mac = MacAddress::from_str("00:11:22:33:44:55").unwrap();
@@ -165,10 +163,7 @@ mod tests {
         device.add_ip("192.168.1.10".parse().unwrap());
         store.upsert(device).unwrap();
 
-        let state = AppState {
-            store,
-            event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
-        };
+        let state = AppState { store };
 
         Router::new()
             .route("/health", get(health))

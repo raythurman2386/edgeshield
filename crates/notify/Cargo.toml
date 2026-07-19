@@ -1,19 +1,19 @@
 [package]
-name = "edgeshield-api"
+name = "edgeshield-notify"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-axum.workspace = true
-tower.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
-tokio.workspace = true
-mac_address.workspace = true
-hex.workspace = true
+rumqttc.workspace = true
 edgeshield-common = { path = "../common" }
-edgeshield-storage = { path = "../storage" }
+edgeshield-config = { path = "../config" }
+edgeshield-discovery = { path = "../discovery" }
+
+[dev-dependencies]
+mac_address.workspace = true
