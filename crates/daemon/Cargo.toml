@@ -9,13 +9,16 @@ tokio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 edgeshield-config = { path = "../config" }
+edgeshield-common = { path = "../common" }
 edgeshield-telemetry = { path = "../telemetry" }
 edgeshield-packet = { path = "../packet" }
 edgeshield-protocol = { path = "../protocol" }
 edgeshield-discovery = { path = "../discovery" }
+edgeshield-rules = { path = "../rules" }
 edgeshield-storage = { path = "../storage" }
 edgeshield-api = { path = "../api" }
 edgeshield-notify = { path = "../notify" }
+chrono.workspace = true
 
 [dev-dependencies]
 mac_address.workspace = true

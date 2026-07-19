@@ -1,6 +1,6 @@
 # EdgeShield ROADMAP
 
-> **Status**: Phase 5 (Alerting & Rules)
+> **Status**: Phase 6 (Security & Access Control)
 > **Version**: 0.1.0
 > **Last updated**: 2026-07-19
 
@@ -104,23 +104,26 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 
 ---
 
-## Phase 5: Alerting & Rules 🔄
+## Phase 5: Alerting & Rules ✅
 
 **Goal**: User-configurable rules that trigger on network events.
 
-**Partially delivered**: New-device alerting via MQTT shipped ahead of schedule (2026-07-18). The `edgeshield-notify` crate publishes a JSON event to an MQTT broker the moment an unknown MAC appears. This is the feature that makes EdgeShield worth running on a homelab — native Home Assistant / Node-RED integration. The remaining work is a general rule engine and additional notification channels.
+**Delivered**: New-device alerting via MQTT shipped ahead of schedule (2026-07-18). The `edgeshield-notify` crate publishes a JSON event to an MQTT broker the moment an unknown MAC appears. This is the feature that makes EdgeShield worth running on a homelab — native Home Assistant / Node-RED integration. The remaining work is a general rule engine and additional notification channels.
 
 | Feature | Priority | Effort | Depends On | Status |
 |---|---|---|---|---|
 | **MQTT new-device alerting** | P0 | 2 days | — | ✅ Delivered |
-| Rule engine (TOML rules file) | P0 | 3 days | — | ⬜ |
-| Built-in rules (new device, known device offline) | P0 | 1 day | rule engine | ⬜ |
-| Webhook notification channel | P0 | 2 days | rule engine | ⬜ |
-| Email notification channel (sendmail) | P1 | 2 days | rule engine | ⬜ |
-| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine | ⬜ |
-| Rate-limited alerts (debounce) | P1 | 1 day | — | ⬜ |
+| **ntfy.sh notification channel** | P0 | 1.5 days | — | ✅ Delivered (Phase 4 follow-up) |
+| **Rule engine (inline TOML rules)** | P0 | 3 days | — | ✅ Delivered (new `edgeshield-rules` crate; conditions: new_device, new_device_by_vendor, new_device_by_mac_prefix, device_offline, protocol_change) |
+| **Built-in rules (new device, device offline)** | P0 | 1 day | rule engine | ✅ Delivered (default new_device rule; background offline scanner) |
+| **Webhook notification channel** | P0 | 2 days | rule engine | ✅ Delivered (Slack/Discord/Teams-compatible; Bearer auth + custom headers) |
+| **Email notification channel (SMTP)** | P1 | 2 days | rule engine | ✅ Delivered (lettre crate; STARTTLS + implicit TLS) |
+| **Multi-notifier fan-out** | P0 | 1 day | rule engine | ✅ Delivered (all configured notifiers receive every alert) |
+| **Alert acknowledgment + suppression** | P1 | 1 day | rule engine | ✅ Delivered (acknowledged alerts suppress future alerts for same device/rule combo) |
+| **Per-rule cooldown (debounce)** | P1 | 1 day | — | ✅ Delivered (per-device per-rule cooldown tracking) |
+| `/alerts` API endpoint + alert history | P1 | 1 day | rule engine | ⬜ Deferred to Phase 8 (Web Dashboard) — alerts persisted in-memory for now |
 
-**Exit criteria**: Configure a rule that emails you when a new MAC appears. Configure another that webhooks when a known device goes silent for 30 min. MQTT new-device alerts already work today.
+**Exit criteria**: Configure a rule that emails you when a new MAC appears. Configure another that webhooks when a known device goes silent for 30 min. MQTT new-device alerts already work today. ✅ All met.
 
 ---
 
@@ -224,6 +227,6 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 5: Alerting & Rules** — rule engine, webhook channel, alert history.
+**Phase 6: Security & Access Control** — API key auth, TLS, configurable listen address.
 
-**Just shipped**: Phase 4 complete (2026-07-19). mDNS/Bonjour service name + hostname extraction, HTTP banner sniffing for non-standard ports, NTP header validation, DHCP vendor class identifier (option 60) storage, and per-protocol packet statistics. New-device alerts now carry hostnames from DHCP or mDNS, and the device inventory tracks per-protocol traffic breakdowns.
+**Just shipped**: Phase 5 complete (2026-07-19). Rule engine with inline TOML rules (`[[rules]]`), five condition types (new_device, new_device_by_vendor, new_device_by_mac_prefix, device_offline, protocol_change), per-device per-rule cooldown, alert acknowledgment with suppression, multi-notifier fan-out (ntfy + MQTT + webhook + email simultaneously), webhook channel (Slack/Discord/Teams-compatible), SMTP email channel (lettre, STARTTLS), and a background offline scanner. New `edgeshield-rules` crate.

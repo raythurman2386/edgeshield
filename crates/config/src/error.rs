@@ -27,4 +27,10 @@ pub enum ConfigError {
 
     #[error("invalid ntfy config: topic cannot be empty")]
     EmptyNtfyTopic,
+
+    #[error("invalid rule config: name cannot be empty")]
+    EmptyRuleName,
+
+    #[error("invalid severity: {0}")]
+    InvalidSeverity(String),
 }

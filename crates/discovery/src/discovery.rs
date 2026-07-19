@@ -44,6 +44,10 @@ pub enum DiscoveryEvent {
     DeviceDiscovered(Device),
     /// An existing device was updated.
     DeviceUpdated(Device),
+    /// A previously-seen device has been silent for longer than a
+    /// rule's threshold. Emitted by the background scanner in the
+    /// daemon, not by the per-packet discovery engine.
+    DeviceOffline(Device),
 }
 
 /// The discovery engine — the stateful core of EdgeShield.
@@ -63,6 +67,22 @@ impl DiscoveryEngine {
         event_tx: mpsc::Sender<DiscoveryEvent>,
     ) -> Self {
         Self { store, event_tx }
+    }
+
+    /// Emit a `DeviceOffline` event for a device that has been silent.
+    ///
+    /// Called by the background scanner in the daemon. Uses `try_send`
+    /// so a full channel doesn't block the scanner — the event is
+    /// dropped with a log instead.
+    pub async fn emit_offline_event(&self, device: Device) {
+        let mac = device.mac;
+        if self
+            .event_tx
+            .try_send(DiscoveryEvent::DeviceOffline(device))
+            .is_err()
+        {
+            warn!(mac = %mac, "offline event channel full; dropping");
+        }
     }
 
     /// Process a captured packet through the full pipeline.

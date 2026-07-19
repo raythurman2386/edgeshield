@@ -38,8 +38,10 @@ use tracing::{error, info, span, Level};
 use edgeshield_api::api;
 use edgeshield_config::config::Config;
 use edgeshield_discovery::discovery::{DiscoveryEngine, DiscoveryEvent};
-use edgeshield_notify::{MqttNotifier, NtfyNotifier};
+use edgeshield_notify::{Notifier, EmailNotifier, MqttNotifier, NtfyNotifier, WebhookNotifier};
 use edgeshield_packet::capture::CaptureSession;
+use edgeshield_rules::store::InMemoryAlertStore;
+use edgeshield_rules::{Rule, RuleCondition, RuleEngine};
 use edgeshield_storage::memory::MemoryStore;
 use edgeshield_storage::sqlite::SqliteStore;
 use edgeshield_storage::store::DeviceStore;
@@ -71,37 +73,114 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
         }
     };
 
-    // 3. Create the event channel
+    // 3. Create the event channel (discovery → rule engine)
     let (event_tx, event_rx) = mpsc::channel::<DiscoveryEvent>(1024);
 
     // 4. Create the discovery engine
     let engine = Arc::new(DiscoveryEngine::new(store.clone(), event_tx));
 
-    // 5. Start the notifier (if MQTT or ntfy is configured)
-    //
-    // The notifier owns the event receiver. When neither MQTT nor
-    // ntfy is configured, event_rx is dropped and the discovery
-    // engine's try_send calls silently fail — the pipeline is
-    // unaffected.
-    //
-    // If both are configured, ntfy wins (it's the more modern,
-    // broker-less option). MQTT is logged as ignored so the user
-    // can fix their config.
-    let notifier_handle = if let Some(ntfy_config) = config.ntfy.clone() {
-        if config.mqtt.is_some() {
-            info!("both [mqtt] and [ntfy] configured; using ntfy (MQTT ignored)");
+    // 5. Build the rule set from config. If no rules are configured,
+    // use a default `new_device` rule (preserving pre-Phase-5
+    // behavior: every new MAC triggers an alert).
+    let mut rules: Vec<Rule> = config
+        .rules
+        .iter()
+        .filter_map(|rc| {
+            match Rule::try_from(rc.clone()) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    error!(rule = %rc.name, error = %e, "skipping invalid rule");
+                    None
+                }
+            }
+        })
+        .collect();
+    if rules.is_empty() {
+        info!("no rules configured; using default new_device rule");
+        rules.push(Rule::new(
+            "new_device".to_string(),
+            true,
+            RuleCondition::NewDevice,
+            edgeshield_common::Severity::Info,
+            0,
+        ));
+    }
+
+    // 6. Create the alert store (in-memory for now; SQLite alert
+    // persistence is a follow-up).
+    let alert_store = Arc::new(InMemoryAlertStore::new());
+
+    // 7. Create the alert channel (rule engine → notifier fanout)
+    let (alert_tx, alert_rx) = mpsc::channel::<edgeshield_common::Alert>(256);
+
+    // 8. Start the rule engine (owns the discovery event receiver)
+    let rule_engine = RuleEngine::new(
+        rules,
+        event_rx,
+        alert_tx,
+        alert_store.clone(),
+    );
+    let rule_engine_handle = tokio::spawn(async move {
+        rule_engine.run().await;
+    });
+
+    // 9. Build the notifier list from config. All configured
+    // notifiers receive every alert via the fanout.
+    let mut notifiers: Vec<Arc<dyn Notifier>> = Vec::new();
+    if let Some(ntfy_config) = config.ntfy.clone() {
+        match NtfyNotifier::new(ntfy_config) {
+            Ok(n) => {
+                info!("ntfy notifier enabled");
+                notifiers.push(Arc::new(n));
+            }
+            Err(e) => error!(error = %e, "failed to create ntfy notifier"),
         }
-        let notifier = NtfyNotifier::new(ntfy_config, event_rx);
+    }
+    if let Some(mqtt_config) = config.mqtt.clone() {
+        info!("MQTT notifier enabled");
+        notifiers.push(Arc::new(MqttNotifier::new(mqtt_config)));
+    }
+    if let Some(webhook_config) = config.webhook.clone() {
+        match WebhookNotifier::new(webhook_config) {
+            Ok(n) => {
+                info!("webhook notifier enabled");
+                notifiers.push(Arc::new(n));
+            }
+            Err(e) => error!(error = %e, "failed to create webhook notifier"),
+        }
+    }
+    if let Some(email_config) = config.email.clone() {
+        match EmailNotifier::new(email_config) {
+            Ok(n) => {
+                info!("email notifier enabled");
+                notifiers.push(Arc::new(n));
+            }
+            Err(e) => error!(error = %e, "failed to create email notifier"),
+        }
+    }
+
+    // 10. Start the notifier fanout (owns the alert receiver)
+    let fanout_handle = if notifiers.is_empty() {
+        info!("no notifiers configured; alerts will only be persisted");
+        // Drop alert_rx to avoid the rule engine blocking on send.
+        drop(alert_rx);
+        None
+    } else {
+        Some(edgeshield_notify::fanout::spawn_fanout(
+            alert_rx,
+            notifiers,
+        ))
+    };
+
+    // 11. Start the offline scanner (if configured)
+    let scanner_handle = if config.scanner.interval_seconds > 0 {
+        let scanner_store = store.clone();
+        let scanner_tx = engine.clone();
+        let interval = config.scanner.interval_seconds;
         Some(tokio::spawn(async move {
-            notifier.run().await;
-        }))
-    } else if let Some(mqtt_config) = config.mqtt.clone() {
-        let notifier = MqttNotifier::new(mqtt_config, event_rx);
-        Some(tokio::spawn(async move {
-            notifier.run().await;
+            offline_scanner(scanner_store, scanner_tx, interval).await;
         }))
     } else {
-        info!("notifications disabled (no [mqtt] or [ntfy] config)");
         None
     };
 
@@ -151,14 +230,57 @@ pub async fn run(config: Config) -> Result<(), anyhow::Error> {
     capture.stop();
     pipeline_handle.await?;
     api_handle.abort();
-    if let Some(handle) = notifier_handle {
-        // The notifier exits when event_tx is dropped, which happens when
-        // the discovery engine (and its event_tx) is dropped below. We
-        // abort rather than await because the notifier may be mid-publish
-        // to a slow broker and we don't want to block shutdown.
+    rule_engine_handle.abort();
+    if let Some(handle) = fanout_handle {
+        handle.abort();
+    }
+    if let Some(handle) = scanner_handle {
         handle.abort();
     }
 
     info!("EdgeShield stopped");
     Ok(())
+}
+
+/// Background scanner for device-offline detection.
+///
+/// Wakes every `interval_seconds`, lists all devices, and emits
+/// `DeviceOffline` events for devices that have been silent for
+/// longer than any `device_offline` rule's threshold. The rule
+/// engine then evaluates these events against its rules.
+async fn offline_scanner(
+    store: Arc<dyn DeviceStore>,
+    engine: Arc<DiscoveryEngine>,
+    interval_seconds: u64,
+) {
+    use std::time::Duration;
+
+    info!(interval_seconds, "offline scanner starting");
+    let mut ticker = tokio::time::interval(Duration::from_secs(interval_seconds));
+    // Skip the first (immediate) tick — we don't want to scan before
+    // any devices have been seen.
+    ticker.tick().await;
+
+    loop {
+        ticker.tick().await;
+        let devices = match store.list() {
+            Ok(d) => d,
+            Err(e) => {
+                error!(error = %e, "scanner: failed to list devices");
+                continue;
+            }
+        };
+        let now = chrono::Utc::now();
+        for device in devices {
+            let last_seen = device.last_seen.inner();
+            let silent_for = now.signed_duration_since(*last_seen);
+            // Emit an offline event for any device silent for more
+            // than 60 seconds. The rule engine's `device_offline`
+            // rules have their own thresholds; the scanner just
+            // provides the raw signal.
+            if silent_for.num_seconds() > 60 {
+                let _ = engine.emit_offline_event(device).await;
+            }
+        }
+    }
 }

@@ -22,13 +22,13 @@
 //! so a slow notifier causes events to be dropped at the channel
 //! rather than stalling the pipeline.
 
-use edgeshield_common::Device;
+use edgeshield_common::{Alert, Device};
 use edgeshield_config::config::MqttConfig;
-use edgeshield_discovery::discovery::DiscoveryEvent;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
 use serde::Serialize;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
+
+use crate::fanout::{Notifier, NotifierError};
 
 /// The JSON payload published to MQTT for each new-device event.
 ///
@@ -83,140 +83,92 @@ impl NewDevicePayload {
 /// loop; spawn it on a tokio task.
 pub struct MqttNotifier {
     config: MqttConfig,
-    event_rx: mpsc::Receiver<DiscoveryEvent>,
+    client: AsyncClient,
 }
 
 impl MqttNotifier {
-    /// Create a new notifier.
+    /// Create a new MQTT notifier.
     ///
-    /// Takes ownership of the event receiver — only one consumer may
-    /// exist, and it is the notifier (not the API, which previously
-    /// held but never read from `event_rx`).
-    #[must_use]
-    pub fn new(config: MqttConfig, event_rx: mpsc::Receiver<DiscoveryEvent>) -> Self {
-        Self { config, event_rx }
+    /// Connects to the broker immediately (rumqttc handles
+    /// reconnection internally). The connection's event stream is
+    /// polled in a background task to keep it alive.
+    pub fn new(config: MqttConfig) -> Self {
+        let mqtt_options = Self::build_mqtt_options(&config);
+        let (client, mut connection) = AsyncClient::new(mqtt_options.clone(), 10);
+
+        // Spawn a background task to drive the MQTT connection's
+        // event stream. This keeps the connection alive and logs
+        // disconnects. rumqttc reconnects automatically.
+        let client_id = mqtt_options.client_id().to_string();
+        tokio::spawn(async move {
+            loop {
+                match connection.poll().await {
+                    Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
+                        info!(client_id = %client_id, "MQTT connected");
+                    }
+                    Ok(rumqttc::Event::Outgoing(_)) => {}
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(error = %e, client_id = %client_id, "MQTT connection error");
+                    }
+                }
+            }
+        });
+
+        Self { config, client }
     }
 
-    /// Run the notifier loop until the event sender is dropped.
-    ///
-    /// This is the task body. It connects to the broker, then loops:
-    /// - Receive a `DiscoveryEvent` from the discovery engine.
-    /// - If it's a new device, publish a JSON payload to the topic.
-    /// - Drive the MQTT connection's event stream to keep it alive.
-    ///
-    /// # Errors
-    ///
-    /// Connection errors are logged, not returned. The notifier
-    /// retries via `rumqttc`'s internal reconnection. If the broker
-    /// is unreachable at startup, the task still runs and keeps
-    /// trying — capture and the API are unaffected.
-    pub async fn run(mut self) {
-        let mqtt_options = self.build_mqtt_options();
-        let client_id = mqtt_options.client_id().to_string();
-
-        info!(
-            broker = %format!("{}:{}", self.config.host, self.config.port),
-            topic = %self.config.topic,
-            client_id = %client_id,
-            "MQTT notifier starting"
+    /// Build `rumqttc::MqttOptions` from our config.
+    fn build_mqtt_options(config: &MqttConfig) -> MqttOptions {
+        let mut opts = MqttOptions::new(
+            config.client_id.clone(),
+            config.host.clone(),
+            config.port,
         );
+        opts.set_clean_session(true);
+        if let (Some(user), Some(pass)) = (&config.username, &config.password) {
+            opts.set_credentials(user, pass);
+        }
+        opts
+    }
+}
 
-        let (client, mut connection) = AsyncClient::new(mqtt_options, 10);
+#[async_trait::async_trait]
+impl Notifier for MqttNotifier {
+    async fn deliver(&self, alert: &Alert) -> Result<(), NotifierError> {
+        let device = &alert.device_snapshot;
+        let protocol = device
+            .protocols
+            .iter()
+            .next()
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
 
-        // Map our config QoS to rumqttc's type. We validated 0..=2 at
-        // config parse time, so this is total.
+        let payload = NewDevicePayload::from_device(device, &protocol);
+        let json = serde_json::to_string(&payload)
+            .map_err(|e| NotifierError::Delivery(format!("serialize failed: {e}")))?;
+
         let qos = match self.config.qos {
             0 => QoS::AtMostOnce,
             1 => QoS::AtLeastOnce,
             _ => QoS::ExactlyOnce,
         };
 
-        loop {
-            tokio::select! {
-                // Drain MQTT connection events to keep the connection
-                // alive and observe broker disconnects. We do not act
-                // on them — rumqttc reconnects automatically.
-                event = connection.poll() => {
-                    match event {
-                        Ok(rumqttc::Event::Incoming(rumqttc::Packet::ConnAck(_))) => {
-                            info!(client_id = %client_id, "MQTT connected");
-                        }
-                        Ok(rumqttc::Event::Outgoing(_)) => {}
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!(error = %e, client_id = %client_id, "MQTT connection error");
-                        }
-                    }
-                }
+        self.client
+            .publish(self.config.topic.clone(), qos, false, json)
+            .await
+            .map_err(|e| NotifierError::Delivery(format!("MQTT publish failed: {e}")))?;
 
-                // Receive discovery events and publish new-device alerts.
-                event = self.event_rx.recv() => {
-                    let Some(event) = event else {
-                        info!(client_id = %client_id, "event channel closed; MQTT notifier stopping");
-                        break;
-                    };
-
-                    // Only publish new-device events. DeviceUpdated fires
-                    // on every packet and would flood the broker.
-                    let DiscoveryEvent::DeviceDiscovered(device) = event else {
-                        continue;
-                    };
-
-                    let protocol = device
-                        .protocols
-                        .iter()
-                        .next()
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-
-                    let payload = NewDevicePayload::from_device(&device, &protocol);
-                    let json = match serde_json::to_string(&payload) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            error!(error = %e, "failed to serialize new-device payload");
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = client
-                        .publish(self.config.topic.clone(), qos, false, json)
-                        .await
-                    {
-                        warn!(
-                            error = %e,
-                            mac = %device.mac,
-                            "failed to publish new-device event to MQTT"
-                        );
-                    } else {
-                        info!(
-                            mac = %device.mac,
-                            topic = %self.config.topic,
-                            "new-device event published"
-                        );
-                    }
-                }
-            }
-        }
+        info!(
+            mac = %alert.mac,
+            topic = %self.config.topic,
+            "alert published to MQTT"
+        );
+        Ok(())
     }
 
-    /// Build `rumqttc::MqttOptions` from our config.
-    ///
-    /// `clean_session(true)` means the broker discards session state
-    /// on disconnect. We don't subscribe to anything, so there's no
-    /// session state worth keeping.
-    fn build_mqtt_options(&self) -> MqttOptions {
-        let mut opts = MqttOptions::new(
-            self.config.client_id.clone(),
-            self.config.host.clone(),
-            self.config.port,
-        );
-        opts.set_clean_session(true);
-
-        if let (Some(user), Some(pass)) = (&self.config.username, &self.config.password) {
-            opts.set_credentials(user, pass);
-        }
-
-        opts
+    fn name(&self) -> &str {
+        "mqtt"
     }
 }
 

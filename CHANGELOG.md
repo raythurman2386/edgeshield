@@ -9,13 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **ntfy.sh notification channel** (`edgeshield-notify`): HTTP POST-based new-device alerting as a broker-less alternative to MQTT. New `NtfyNotifier` reuses the MQTT `NewDevicePayload` JSON shape so consumers can switch transports without changing parsers. Supports `Bearer` token auth, `Priority`, and `Tags` headers. New `[ntfy]` config section with `base_url`, `topic`, `token`, `priority`, `tags`.
-- **mDNS/Bonjour parsing** (`edgeshield-protocol`): New `mdns` module parses the DNS wire format on UDP 5353, extracting hostnames from SRV records and instance/service names from PTR records. Supports DNS name compression. Discovery populates `device.hostname` from mDNS when DHCP hasn't already.
-- **HTTP banner sniffing** (`edgeshield-protocol`): TCP packets on non-standard ports are now classified as HTTP when the payload starts with an HTTP method (`GET`, `POST`, etc.) or an `HTTP/1.` status line. Catches HTTP on ports 8080, 8000, etc. without false-positiving on every TCP stream.
-- **NTP header validation** (`edgeshield-protocol`): New `ntp` module validates the 48-byte NTP header (version 3 or 4, mode 1-6), reducing false positives where port 123 is used by something else.
-- **DHCP vendor class storage** (`edgeshield-common`, `edgeshield-discovery`): The DHCP option 60 vendor class identifier is now extracted and stored on the device record as `dhcp_vendor_class`, distinct from the OUI vendor.
-- **Per-protocol packet statistics** (`edgeshield-common`, `edgeshield-storage`): `Device` now tracks a `BTreeMap<Protocol, u64>` of per-protocol packet counts, persisted to SQLite as a JSON column and exposed via the REST API. Useful for fingerprinting (mDNS+DNS = IoT appliance; HTTPS+NTP = workstation).
-- **SQLite schema migration** (`edgeshield-storage`): Additive `ALTER TABLE ADD COLUMN` migrations for `dhcp_vendor_class` and `protocol_stats`, idempotent against already-migrated databases.
+- **Rule engine** (`edgeshield-rules` crate): evaluates user-configured rules against discovery events and emits `Alert`s. Five condition types: `new_device`, `new_device_by_vendor`, `new_device_by_mac_prefix`, `device_offline` (with `after_seconds` threshold), and `protocol_change`. Per-device per-rule cooldown tracking prevents alert floods. Alert acknowledgment suppresses future alerts for the same device/rule combination.
+- **Inline TOML rules** (`edgeshield-config`): rules live in `config.toml` as `[[rules]]` tables. No separate rules file needed. Validated at parse time (name, severity, condition).
+- **Multi-notifier fan-out** (`edgeshield-notify`): all configured notifiers (ntfy, MQTT, webhook, email) receive every alert simultaneously. New `Notifier` trait and `NotifierFanout` dispatcher. A slow notifier doesn't block others.
+- **Webhook notification channel** (`edgeshield-notify`): POSTs alerts as JSON to any HTTP endpoint. Compatible with Slack, Discord, Microsoft Teams, and generic webhooks. Supports Bearer token auth and custom headers.
+- **Email notification channel** (`edgeshield-notify`): sends alerts as plain-text emails via SMTP (lettre crate). Supports STARTTLS (port 587) and implicit TLS (port 465). No local MTA required.
+- **Device offline scanner** (`edgeshield-daemon`): background task wakes every 60s (configurable via `[scanner] interval_seconds`), lists all devices, and emits `DeviceOffline` events for devices silent for more than 60 seconds. The rule engine evaluates these against `device_offline` rules.
+- **Default new_device rule**: if no `[[rules]]` are configured, a default `new_device` rule runs (preserving pre-Phase-5 behavior — every new MAC triggers an alert).
+- **Alert types** (`edgeshield-common`): new `Alert`, `Severity` (info/warning/critical), `AlertEventType` (new_device/device_offline/protocol_change/custom), and `AlertId` types.
+- **AlertStore trait** (`edgeshield-rules`): storage abstraction for alerts with an in-memory implementation. `insert_alert`, `list_alerts` (with filter), `get_alert`, `acknowledge_alert`, `delete_alert`, `is_acknowledged`, `count_alerts`.
+- **`DiscoveryEvent::DeviceOffline`** variant for the offline scanner.
+
+### Changed
+
+- **Notify crate refactored**: notifiers now consume `Alert`s (not `DiscoveryEvent`s) via the `Notifier` trait. The rule engine is the single consumer of `DiscoveryEvent`s. The `notify` crate no longer depends on `edgeshield-discovery`.
+- **NtfyNotifier**: constructor takes `NtfyConfig` only (no `event_rx`); implements `Notifier` trait.
+- **MqttNotifier**: constructor takes `MqttConfig` only; implements `Notifier` trait; connection polling moved to a background task.
+- **Daemon wiring**: rule engine sits between discovery and notification; fanout dispatches alerts to all notifiers.
 
 ## [0.1.0] - 2026-07-18
 

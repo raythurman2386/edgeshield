@@ -9,6 +9,7 @@ members = [
     "crates/protocol",
     "crates/storage",
     "crates/discovery",
+    "crates/rules",
     "crates/notify",
     "crates/api",
     "crates/daemon",
@@ -49,9 +50,13 @@ bytes = "1"
 
 # Concurrency
 dashmap = "6"
+async-trait = "0.1"
 
 # HTTP client (for ntfy notifications)
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Email (SMTP)
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "builder", "tokio1-rustls-tls"] }
 
 # MQTT (for new-device alerting)
 rumqttc = { version = "0.24", default-features = false }

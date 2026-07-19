@@ -30,56 +30,63 @@
 //! `Title` header is set to a human-readable summary so the
 //! notification card is useful even before the body is expanded.
 
+use edgeshield_common::Alert;
 use edgeshield_config::config::NtfyConfig;
-use edgeshield_discovery::discovery::DiscoveryEvent;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
+use crate::fanout::{Notifier, NotifierError};
 use crate::mqtt::NewDevicePayload;
 
-/// An ntfy-backed notifier for new-device events.
+/// An ntfy-backed notifier for alert delivery.
 ///
-/// Created from an `NtfyConfig`. Call `run()` to start the consumer
-/// loop; spawn it on a tokio task.
+/// Created from an `NtfyConfig`. Implements the `Notifier` trait so
+/// it can be used with the `NotifierFanout`. Each `deliver()` call
+/// POSTs the alert as JSON to the ntfy topic URL.
 pub struct NtfyNotifier {
-    config: NtfyConfig,
-    event_rx: mpsc::Receiver<DiscoveryEvent>,
+    client: reqwest::Client,
+    url: String,
+    base_headers: HeaderMap,
 }
 
 impl NtfyNotifier {
-    /// Create a new notifier.
+    /// Create a new ntfy notifier.
     ///
-    /// Takes ownership of the event receiver — only one consumer may
-    /// exist. The daemon ensures at most one notifier (MQTT *or*
-    /// ntfy) holds the receiver.
-    #[must_use]
-    pub fn new(config: NtfyConfig, event_rx: mpsc::Receiver<DiscoveryEvent>) -> Self {
-        Self { config, event_rx }
+    /// Builds the HTTP client and pre-computes the URL and static
+    /// headers (auth, priority, tags). Returns an error if the HTTP
+    /// client can't be built.
+    pub fn new(config: NtfyConfig) -> Result<Self, NotifierError> {
+        let url = format!("{}/{}", config.base_url, config.topic);
+        let base_headers = Self::build_headers_static(&config);
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|e| NotifierError::Config(format!("failed to build HTTP client: {e}")))?;
+        Ok(Self {
+            client,
+            url,
+            base_headers,
+        })
     }
 
     /// Build the static header set (auth, priority, tags) once.
-    ///
-    /// Per-event headers (Title) are added on each request.
-    fn build_headers(&self) -> HeaderMap {
+    fn build_headers_static(config: &NtfyConfig) -> HeaderMap {
         let mut headers = HeaderMap::new();
 
-        if let Some(ref token) = self.config.token {
-            // ntfy accepts `Authorization: Bearer <token>`.
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                headers.insert(AUTHORIZATION, value);
-            } else {
-                warn!(topic = %self.config.topic, "ntfy token contains invalid header chars; ignoring");
-            }
+        if let Some(ref token) = config.token
+            && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            headers.insert(AUTHORIZATION, value);
+        } else if config.token.is_some() {
+            warn!(topic = %config.topic, "ntfy token contains invalid header chars; ignoring");
         }
 
-        if let Some(priority) = self.config.priority
+        if let Some(priority) = config.priority
             && let Ok(value) = HeaderValue::from_str(&priority.to_string())
         {
             headers.insert("Priority", value);
         }
 
-        if let Some(ref tags) = self.config.tags
+        if let Some(ref tags) = config.tags
             && let Ok(value) = HeaderValue::from_str(tags)
         {
             headers.insert("Tags", value);
@@ -87,109 +94,62 @@ impl NtfyNotifier {
 
         headers
     }
+}
 
-    /// Run the notifier loop until the event sender is dropped.
-    ///
-    /// This is the task body. It builds a pooled HTTP client, then
-    /// loops receiving `DiscoveryEvent`s and POSTing new-device
-    /// events to the ntfy topic URL.
-    ///
-    /// # Errors
-    ///
-    /// POST errors are logged, not returned. The notifier retries on
-    /// the next event — there is no persistent connection to lose. If
-    /// the ntfy server is unreachable at startup, the task still runs
-    /// and keeps trying — capture and the API are unaffected.
-    pub async fn run(mut self) {
-        let url = format!("{}/{}", self.config.base_url, self.config.topic);
-        let base_headers = self.build_headers();
+#[async_trait::async_trait]
+impl Notifier for NtfyNotifier {
+    async fn deliver(&self, alert: &Alert) -> Result<(), NotifierError> {
+        // Build the JSON payload from the alert's device snapshot.
+        // We reuse the MQTT NewDevicePayload shape so consumers can
+        // switch transports without changing parsers.
+        let device = &alert.device_snapshot;
+        let protocol = device
+            .protocols
+            .iter()
+            .next()
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
 
-        // Build a pooled client. ntfy.sh uses HTTPS; we rely on the
-        // system root certs via rustls-tls.
-        let client = match reqwest::Client::builder().build() {
-            Ok(c) => c,
-            Err(e) => {
-                error!(error = %e, "failed to build ntfy HTTP client; notifier disabled");
-                return;
-            }
-        };
+        let payload = NewDevicePayload::from_device(device, &protocol);
+        let json = serde_json::to_string(&payload)
+            .map_err(|e| NotifierError::Delivery(format!("serialize failed: {e}")))?;
 
-        info!(
-            url = %url,
-            topic = %self.config.topic,
-            "ntfy notifier starting"
-        );
+        // Human-readable title for the notification card. Includes
+        // the alert severity for at-a-glance triage.
+        let name = device
+            .hostname
+            .clone()
+            .or_else(|| device.vendor.clone())
+            .unwrap_or_else(|| device.mac.to_string());
+        let title = format!("[{}] {}: {name} ({})", alert.severity, alert.message, device.mac);
 
-        loop {
-            let Some(event) = self.event_rx.recv().await else {
-                info!("event channel closed; ntfy notifier stopping");
-                break;
-            };
-
-            // Only publish new-device events. DeviceUpdated fires on
-            // every packet and would flood the ntfy server.
-            let DiscoveryEvent::DeviceDiscovered(device) = event else {
-                continue;
-            };
-
-            let protocol = device
-                .protocols
-                .iter()
-                .next()
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            let payload = NewDevicePayload::from_device(&device, &protocol);
-            let json = match serde_json::to_string(&payload) {
-                Ok(j) => j,
-                Err(e) => {
-                    error!(error = %e, "failed to serialize new-device payload");
-                    continue;
-                }
-            };
-
-            // Human-readable title for the notification card.
-            let title = format!(
-                "New device: {} ({})",
-                device
-                    .hostname
-                    .clone()
-                    .or_else(|| device.vendor.clone())
-                    .unwrap_or_else(|| device.mac.to_string()),
-                device.mac
-            );
-
-            let mut headers = base_headers.clone();
-            if let Ok(value) = HeaderValue::from_str(&title) {
-                headers.insert("Title", value);
-            }
-
-            match client
-                .post(&url)
-                .headers(headers)
-                .body(json)
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    info!(mac = %device.mac, url = %url, "new-device event published to ntfy");
-                }
-                Ok(resp) => {
-                    warn!(
-                        status = %resp.status(),
-                        mac = %device.mac,
-                        "ntfy publish returned non-success status"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        mac = %device.mac,
-                        "failed to publish new-device event to ntfy"
-                    );
-                }
-            }
+        let mut headers = self.base_headers.clone();
+        if let Ok(value) = HeaderValue::from_str(&title) {
+            headers.insert("Title", value);
         }
+
+        match self
+            .client
+            .post(&self.url)
+            .headers(headers)
+            .body(json)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!(mac = %alert.mac, url = %self.url, "alert published to ntfy");
+                Ok(())
+            }
+            Ok(resp) => Err(NotifierError::Delivery(format!(
+                "ntfy returned status {}",
+                resp.status()
+            ))),
+            Err(e) => Err(NotifierError::Delivery(format!("ntfy POST failed: {e}"))),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "ntfy"
     }
 }
 
@@ -212,14 +172,10 @@ mod tests {
 
     #[test]
     fn test_build_headers_no_auth() {
-        let notifier = NtfyNotifier {
-            config: sample_config(),
-            event_rx: mpsc::channel::<DiscoveryEvent>(1).1,
-        };
-        let headers = notifier.build_headers();
-        assert!(headers.get(AUTHORIZATION).is_none());
-        assert!(headers.get("Priority").is_none());
-        assert!(headers.get("Tags").is_none());
+        let notifier = NtfyNotifier::new(sample_config()).unwrap();
+        assert!(notifier.base_headers.get(AUTHORIZATION).is_none());
+        assert!(notifier.base_headers.get("Priority").is_none());
+        assert!(notifier.base_headers.get("Tags").is_none());
     }
 
     #[test]
@@ -228,17 +184,13 @@ mod tests {
         config.token = Some("tok_abc123".to_string());
         config.priority = Some(2);
         config.tags = Some("warning,desktop".to_string());
-        let notifier = NtfyNotifier {
-            config,
-            event_rx: mpsc::channel::<DiscoveryEvent>(1).1,
-        };
-        let headers = notifier.build_headers();
+        let notifier = NtfyNotifier::new(config).unwrap();
         assert_eq!(
-            headers.get(AUTHORIZATION).unwrap(),
+            notifier.base_headers.get(AUTHORIZATION).unwrap(),
             "Bearer tok_abc123"
         );
-        assert_eq!(headers.get("Priority").unwrap(), "2");
-        assert_eq!(headers.get("Tags").unwrap(), "warning,desktop");
+        assert_eq!(notifier.base_headers.get("Priority").unwrap(), "2");
+        assert_eq!(notifier.base_headers.get("Tags").unwrap(), "warning,desktop");
     }
 
     #[test]
@@ -246,12 +198,8 @@ mod tests {
         let mut config = sample_config();
         // A newline is invalid in an HTTP header value.
         config.token = Some("bad\ntoken".to_string());
-        let notifier = NtfyNotifier {
-            config,
-            event_rx: mpsc::channel::<DiscoveryEvent>(1).1,
-        };
-        let headers = notifier.build_headers();
-        assert!(headers.get(AUTHORIZATION).is_none());
+        let notifier = NtfyNotifier::new(config).unwrap();
+        assert!(notifier.base_headers.get(AUTHORIZATION).is_none());
     }
 
     #[test]

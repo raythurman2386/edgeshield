@@ -29,8 +29,14 @@
 //!
 //! `notify` never depends on `api`, `packet`, or `daemon`.
 
+pub mod email;
+pub mod fanout;
 pub mod mqtt;
 pub mod ntfy;
+pub mod webhook;
 
+pub use email::EmailNotifier;
+pub use fanout::{Notifier, NotifierError, NotifierFanout};
 pub use mqtt::MqttNotifier;
 pub use ntfy::NtfyNotifier;
+pub use webhook::WebhookNotifier;

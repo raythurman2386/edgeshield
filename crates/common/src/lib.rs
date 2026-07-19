@@ -17,10 +17,12 @@
 //! - This crate has zero dependencies on other workspace crates, making it
 //!   a stable foundation.
 
+pub mod alert;
 pub mod error;
 pub mod time;
 pub mod types;
 
+pub use alert::*;
 pub use error::*;
 pub use time::*;
 pub use types::*;

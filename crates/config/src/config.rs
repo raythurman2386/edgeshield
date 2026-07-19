@@ -3,7 +3,10 @@
 //! Reads and validates the TOML configuration file.
 
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::str::FromStr;
+
+use edgeshield_common::Severity;
 
 /// Top-level configuration for EdgeShield.
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +46,34 @@ pub struct Config {
     /// homelabs without an MQTT broker.
     #[serde(default)]
     pub ntfy: Option<NtfyConfig>,
+
+    /// Webhook notification settings. When present, EdgeShield POSTs
+    /// each alert as JSON to the configured URL. Supports Slack,
+    /// Discord, Teams, and any generic webhook.
+    #[serde(default)]
+    pub webhook: Option<WebhookConfig>,
+
+    /// Email notification settings. When present, EdgeShield sends
+    /// each alert as an email via SMTP.
+    #[serde(default)]
+    pub email: Option<EmailConfig>,
+
+    /// Alerting rules. Each rule defines a condition, severity, and
+    /// cooldown. When the rule engine matches a condition against a
+    /// discovery event, it produces an `Alert` that is delivered to
+    /// all configured notifiers.
+    ///
+    /// If no rules are configured, a default `new_device` rule is
+    /// used (preserving the pre-Phase-5 behavior).
+    #[serde(default)]
+    pub rules: Vec<RuleConfig>,
+
+    /// Background scanner settings for device-offline detection.
+    /// The scanner wakes periodically, lists all devices, and emits
+    /// `DeviceOffline` events for devices that have been silent
+    /// longer than any `device_offline` rule's threshold.
+    #[serde(default)]
+    pub scanner: ScannerConfig,
 }
 
 /// MQTT broker configuration for new-device alerting.
@@ -153,6 +184,159 @@ pub struct NtfyConfig {
     pub tags: Option<String>,
 }
 
+/// Webhook notification configuration.
+///
+/// POSTs each alert as JSON to the configured URL. Compatible with
+/// Slack, Discord, Microsoft Teams, and any generic webhook that
+/// accepts a JSON POST body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebhookConfig {
+    /// The webhook URL (e.g.,
+    /// `https://hooks.slack.com/services/...`).
+    pub url: String,
+
+    /// Optional Bearer token for authentication. Sent as
+    /// `Authorization: Bearer <token>`.
+    #[serde(default)]
+    pub token: Option<String>,
+
+    /// Optional custom HTTP headers (e.g., for webhook services that
+    /// require specific headers).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+
+    /// Request timeout in seconds. Default 10.
+    #[serde(default = "default_webhook_timeout")]
+    pub timeout_seconds: u64,
+}
+
+/// Email notification configuration via SMTP.
+///
+/// Sends each alert as a plain-text email. Uses the `lettre` crate
+/// for SMTP delivery (no local MTA required).
+#[derive(Debug, Clone, Deserialize)]
+pub struct EmailConfig {
+    /// SMTP server hostname (e.g., `smtp.gmail.com`).
+    pub host: String,
+
+    /// SMTP server port. Default 587 (STARTTLS).
+    #[serde(default = "default_email_port")]
+    pub port: u16,
+
+    /// Username for SMTP authentication.
+    pub username: String,
+
+    /// Password for SMTP authentication.
+    pub password: String,
+
+    /// From email address.
+    pub from: String,
+
+    /// To email address (recipient).
+    pub to: String,
+
+    /// Whether to use STARTTLS. Default true.
+    #[serde(default = "default_email_starttls")]
+    pub starttls: bool,
+
+    /// Subject prefix for alert emails. Default `[EdgeShield]`.
+    #[serde(default = "default_email_subject_prefix")]
+    pub subject_prefix: String,
+}
+
+fn default_webhook_timeout() -> u64 {
+    10
+}
+
+fn default_email_port() -> u16 {
+    587
+}
+
+fn default_email_starttls() -> bool {
+    true
+}
+
+fn default_email_subject_prefix() -> String {
+    "[EdgeShield]".to_string()
+}
+
+/// A user-configured alerting rule.
+///
+/// Rules are defined inline in `config.toml` as `[[rules]]` tables.
+/// Each rule has a condition, severity, and cooldown. When the rule
+/// engine matches the condition against a discovery event, it
+/// produces an `Alert`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuleConfig {
+    /// Human-readable name (shown in alerts and logs).
+    pub name: String,
+
+    /// Whether the rule is enabled. Default `true`.
+    #[serde(default = "default_rule_enabled")]
+    pub enabled: bool,
+
+    /// The condition that triggers the rule.
+    pub condition: RuleConditionConfig,
+
+    /// Severity: "info", "warning", or "critical". Default "info".
+    #[serde(default = "default_rule_severity")]
+    pub severity: String,
+
+    /// Minimum seconds between alerts for the same device from this
+    /// rule. `0` = no cooldown. Default `0`.
+    #[serde(default)]
+    pub cooldown_seconds: u64,
+}
+
+/// The condition for a rule, parsed from TOML.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum RuleConditionConfig {
+    /// Simple string conditions: "new_device", "protocol_change".
+    Simple(String),
+    /// Table conditions with parameters.
+    NewDeviceByVendor { new_device_by_vendor: String },
+    NewDeviceByMacPrefix { new_device_by_mac_prefix: String },
+    DeviceOffline { device_offline: DeviceOfflineCondition },
+}
+
+/// Parameters for the `device_offline` condition.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeviceOfflineCondition {
+    /// Emit an offline alert after the device has been silent for
+    /// this many seconds.
+    pub after_seconds: u64,
+}
+
+/// Background scanner settings for device-offline detection.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScannerConfig {
+    /// How often (in seconds) the scanner wakes to check for offline
+    /// devices. Default 60s. Set to 0 to disable the scanner entirely.
+    #[serde(default = "default_scanner_interval")]
+    pub interval_seconds: u64,
+}
+
+impl Default for ScannerConfig {
+    fn default() -> Self {
+        Self {
+            interval_seconds: default_scanner_interval(),
+        }
+    }
+}
+
+fn default_rule_enabled() -> bool {
+    true
+}
+
+fn default_rule_severity() -> String {
+    "info".to_string()
+}
+
+const fn default_scanner_interval() -> u64 {
+    60
+}
+
 const fn default_api_port() -> u16 {
     8080
 }
@@ -179,6 +363,10 @@ impl Default for Config {
             database_path: default_database_path(),
             mqtt: None,
             ntfy: None,
+            webhook: None,
+            email: None,
+            rules: Vec::new(),
+            scanner: ScannerConfig::default(),
         }
     }
 }
@@ -221,6 +409,17 @@ impl FromStr for Config {
             if let Some(stripped) = ntfy.base_url.strip_suffix('/') {
                 ntfy.base_url = stripped.to_string();
             }
+        }
+
+        // Validate rules: each rule name must be non-empty, and the
+        // severity must be a valid value.
+        for rule in &config.rules {
+            if rule.name.trim().is_empty() {
+                return Err(crate::ConfigError::EmptyRuleName);
+            }
+            // Validate severity string (parse to check, discard result).
+            let _ = Severity::from_str(&rule.severity)
+                .map_err(crate::ConfigError::InvalidSeverity)?;
         }
 
         Ok(config)
@@ -456,5 +655,118 @@ mod tests {
         "#;
         let result: Result<Config, _> = toml.parse();
         assert!(matches!(result, Err(crate::ConfigError::EmptyNtfyTopic)));
+    }
+
+    #[test]
+    fn test_rules_default_empty() {
+        let toml = r#"
+            interface = "eth0"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert!(config.rules.is_empty());
+        assert_eq!(config.scanner.interval_seconds, 60);
+    }
+
+    #[test]
+    fn test_rules_parse_simple_new_device() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = "new-device-alert"
+            condition = "new_device"
+            severity = "info"
+            cooldown_seconds = 300
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.rules[0].name, "new-device-alert");
+        assert_eq!(config.rules[0].severity, "info");
+        assert_eq!(config.rules[0].cooldown_seconds, 300);
+        assert!(config.rules[0].enabled); // default true
+    }
+
+    #[test]
+    fn test_rules_parse_device_offline() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = "offline-30min"
+            condition = { device_offline = { after_seconds = 1800 } }
+            severity = "warning"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.rules.len(), 1);
+        match &config.rules[0].condition {
+            RuleConditionConfig::DeviceOffline { device_offline } => {
+                assert_eq!(device_offline.after_seconds, 1800);
+            }
+            other => panic!("expected DeviceOffline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rules_parse_new_device_by_vendor() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = "new-iot"
+            condition = { new_device_by_vendor = "TP-Link" }
+        "#;
+        let config: Config = toml.parse().unwrap();
+        match &config.rules[0].condition {
+            RuleConditionConfig::NewDeviceByVendor { new_device_by_vendor } => {
+                assert_eq!(new_device_by_vendor, "TP-Link");
+            }
+            other => panic!("expected NewDeviceByVendor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_rules_parse_disabled() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = "disabled-rule"
+            enabled = false
+            condition = "new_device"
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert!(!config.rules[0].enabled);
+    }
+
+    #[test]
+    fn test_rules_empty_name_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = ""
+            condition = "new_device"
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::EmptyRuleName)));
+    }
+
+    #[test]
+    fn test_rules_invalid_severity_rejected() {
+        let toml = r#"
+            interface = "eth0"
+            [[rules]]
+            name = "bad-severity"
+            condition = "new_device"
+            severity = "urgent"
+        "#;
+        let result: Result<Config, _> = toml.parse();
+        assert!(matches!(result, Err(crate::ConfigError::InvalidSeverity(_))));
+    }
+
+    #[test]
+    fn test_scanner_custom_interval() {
+        let toml = r#"
+            interface = "eth0"
+            [scanner]
+            interval_seconds = 120
+        "#;
+        let config: Config = toml.parse().unwrap();
+        assert_eq!(config.scanner.interval_seconds, 120);
     }
 }
