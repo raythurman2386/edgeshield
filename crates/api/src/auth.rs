@@ -363,6 +363,13 @@ pub async fn auth_middleware(
 ) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+
+    // `/health` is always exempt from authentication — load balancers
+    // and monitoring systems need unauthenticated access.
+    if path == "/health" {
+        return next.run(request).await;
+    }
+
     let auth_header = request
         .headers()
         .get("Authorization")

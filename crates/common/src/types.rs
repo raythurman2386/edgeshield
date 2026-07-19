@@ -18,6 +18,42 @@ use std::net::IpAddr;
 
 use crate::time::Timestamp;
 
+/// Serialize a `BTreeMap<Protocol, u64>` as a JSON object with string
+/// keys (since serde_json requires string keys, but `Protocol` is an
+/// enum). The keys are the `Display` form of each protocol (e.g.,
+/// "TCP", "mDNS", "UNKNOWN(42)").
+fn serialize_protocol_stats<S>(
+    stats: &BTreeMap<Protocol, u64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(stats.len()))?;
+    for (proto, count) in stats {
+        map.serialize_entry(&proto.to_string(), count)?;
+    }
+    map.end()
+}
+
+/// Deserialize a `BTreeMap<Protocol, u64>` from a JSON object with
+/// string keys. Parses each key back to a `Protocol` via `FromStr`.
+fn deserialize_protocol_stats<'de, D>(deserializer: D) -> Result<BTreeMap<Protocol, u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use std::str::FromStr;
+    let raw: std::collections::HashMap<String, u64> = Deserialize::deserialize(deserializer)?;
+    let mut map = BTreeMap::new();
+    for (key, count) in raw {
+        if let Ok(proto) = Protocol::from_str(&key) {
+            map.insert(proto, count);
+        }
+    }
+    Ok(map)
+}
+
 /// A protocol detected on the network.
 ///
 /// This enum is intentionally flat for the MVP. As we add protocol
@@ -55,6 +91,37 @@ impl std::fmt::Display for Protocol {
             Protocol::Mdns => write!(f, "mDNS"),
             Protocol::Ntp => write!(f, "NTP"),
             Protocol::Other(n) => write!(f, "UNKNOWN({})", n),
+        }
+    }
+}
+
+impl std::str::FromStr for Protocol {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ARP" => Ok(Protocol::Arp),
+            "IPv4" => Ok(Protocol::Ipv4),
+            "ICMP" => Ok(Protocol::Icmp),
+            "TCP" => Ok(Protocol::Tcp),
+            "UDP" => Ok(Protocol::Udp),
+            "DNS" => Ok(Protocol::Dns),
+            "DHCP" => Ok(Protocol::Dhcp),
+            "HTTP" => Ok(Protocol::Http),
+            "HTTPS" => Ok(Protocol::Https),
+            "mDNS" => Ok(Protocol::Mdns),
+            "NTP" => Ok(Protocol::Ntp),
+            _ => {
+                if let Some(n) = s
+                    .strip_prefix("UNKNOWN(")
+                    .and_then(|s| s.strip_suffix(')'))
+                    .and_then(|n| n.parse().ok())
+                {
+                    Ok(Protocol::Other(n))
+                } else {
+                    Err(format!("unknown protocol: {s}"))
+                }
+            }
         }
     }
 }
@@ -100,7 +167,12 @@ pub struct Device {
     /// number of packets observed for that protocol. Useful for
     /// fingerprinting (e.g., a device that only does mDNS + DNS is
     /// likely an IoT appliance; one doing HTTPS + NTP is likely a
-    /// workstation). Stored as a JSON object in SQLite.
+    /// workstation). Stored as a JSON object in SQLite with string
+    /// keys (Protocol's Display form).
+    #[serde(
+        serialize_with = "serialize_protocol_stats",
+        deserialize_with = "deserialize_protocol_stats"
+    )]
     pub protocol_stats: BTreeMap<Protocol, u64>,
 }
 
