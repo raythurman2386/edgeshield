@@ -1,8 +1,8 @@
 # EdgeShield ROADMAP
 
-> **Status**: Phase 7 (Packaging & Distribution)
+> **Status**: Phase 7 (Packaging & Distribution) — in progress
 > **Version**: 0.1.0
-> **Last updated**: 2026-07-19
+> **Last updated**: 2026-07-20
 
 ---
 
@@ -145,19 +145,22 @@ Device fingerprinting is what makes new-device alerts useful. "New device: 00:11
 
 ---
 
-## Phase 7: Packaging & Distribution ⬜
+## Phase 7: Packaging & Distribution 🔄
 
 **Goal**: One-command install on supported platforms.
 
-| Feature | Priority | Effort | Depends On |
-|---|---|---|---|
-| `.deb` package (Debian/Ubuntu/Raspbian) | P0 | 1 day | Phase 2 |
-| Docker image (multi-arch: amd64, arm64) | P0 | 1 day | — |
-| `edgeshield setup` wizard (first-run config) | P1 | 2 days | — |
-| Release script (tag, build, publish) | P1 | 1 day | — |
-| Homebrew formula (macOS devs) | P2 | 0.5 day | — |
+**Partially delivered**: Docker image (multi-arch amd64+arm64) and the `edgeshield setup` wizard shipped (2026-07-20). The Docker image is a multi-stage build (rust:1.97-bookworm → debian:bookworm-slim) with a first-run entrypoint that auto-generates a config via the setup wizard. The wizard supports interactive (dialoguer prompts) and non-interactive (flags/env) modes, optional API key generation, and notifier wiring. A bundled Grafana dashboard (`dist/grafana/edgeshield-dashboard.json`) and observability docs (`docs/observability.md`) give operators Prometheus + Loki integration without adding egress to the daemon. Remaining work: `.deb` package, release script, Homebrew formula.
 
-**Exit criteria**: `apt install edgeshield` on a Pi 4, then `systemctl start edgeshield` = running daemon.
+| Feature | Priority | Effort | Depends On | Status |
+|---|---|---|---|---|
+| Docker image (multi-arch: amd64, arm64) | P0 | 1 day | — | ✅ Delivered (multi-stage Dockerfile, `dist/docker/entrypoint.sh`, `docker-compose.yaml`, Makefile targets, GHCR CI in `.github/workflows/docker.yaml`) |
+| `edgeshield setup` wizard (first-run config) | P1 | 2 days | — | ✅ Delivered (`crates/cli/src/setup.rs`; interactive + `--non-interactive` modes; API key gen; MQTT/ntfy/webhook/email wiring; 9 unit tests) |
+| Grafana dashboard + observability docs | P1 | 1 day | Docker image | ✅ Delivered (`dist/grafana/edgeshield-dashboard.json`, `docs/observability.md`, `docs/deployment/grafana.md`; sidecar collector pattern — daemon stays fully private) |
+| `.deb` package (Debian/Ubuntu/Raspbian) | P0 | 1 day | Phase 2 | ⬜ |
+| Release script (tag, build, publish) | P1 | 1 day | — | ⬜ |
+| Homebrew formula (macOS devs) | P2 | 0.5 day | — | ⬜ |
+
+**Exit criteria**: `apt install edgeshield` on a Pi 4, then `systemctl start edgeshield` = running daemon. (Docker path met: `docker run --net=host --cap-add=NET_RAW ghcr.io/edgeshield/edgeshield` = running daemon.)
 
 ---
 
@@ -234,6 +237,8 @@ These are explicitly out of scope to prevent feature creep:
 
 ## Current Focus
 
-**Phase 7: Packaging & Distribution** — `.deb` package, Docker image, setup wizard.
+**Phase 7: Packaging & Distribution** — `.deb` package, release script, Homebrew formula remain. Docker image, setup wizard, and Grafana dashboard shipped.
 
-**Just shipped**: Terminal UI (`edgeshield tui`) and hot-path performance optimizations (2026-07-19). The TUI is a ratatui-based read-only observability dashboard over the REST API (devices, alerts, metrics, health views). The performance work includes a write-back cache for SqliteStore (no per-packet SQL writes), single timestamp per packet, and event emission only on state changes — together enabling 10k+ pps with persistence on Raspberry Pi 4.
+**Just shipped**: Docker image (multi-arch amd64+arm64), `edgeshield setup` wizard, and a bundled Grafana dashboard with observability docs (2026-07-20). The Docker image is a multi-stage build with a first-run entrypoint that auto-generates a config via the setup wizard. The wizard supports interactive and `--non-interactive` modes, optional API key generation, and MQTT/ntfy/webhook/email wiring. The Grafana dashboard (`dist/grafana/edgeshield-dashboard.json`) and `docs/observability.md` give operators Prometheus + Loki integration via sidecar collectors — the daemon stays fully private (no egress, no new deps).
+
+**Previously shipped**: Terminal UI (`edgeshield tui`) and hot-path performance optimizations (2026-07-19). The TUI is a ratatui-based read-only observability dashboard over the REST API (devices, alerts, metrics, health views). The performance work includes a write-back cache for SqliteStore (no per-packet SQL writes), single timestamp per packet, and event emission only on state changes — together enabling 10k+ pps with persistence on Raspberry Pi 4.
