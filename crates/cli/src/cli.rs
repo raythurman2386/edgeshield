@@ -266,11 +266,20 @@ database_path = ""
                 key,
                 refresh_ms,
             };
-            // run() owns its own tokio runtime; block_on it from the
-            // existing runtime (it spawns a nested runtime via
-            // Runtime::new, which is fine because we're not holding
-            // any async resources across the call).
-            edgeshield_tui::run(args)
+            // The TUI owns its own tokio runtime (see `edgeshield_tui::run`).
+            // We're already running inside the CLI's runtime here, so
+            // calling `edgeshield_tui::run` directly would attempt to
+            // `block_on` a new runtime from within an existing one —
+            // which panics ("Cannot start a runtime from within a
+            // runtime"). Spawn a dedicated OS thread that is *not*
+            // affiliated with the outer runtime, build the TUI runtime
+            // there, and join it. The outer runtime is idle during this
+            // call (no other tasks are running), so blocking on the
+            // join is safe.
+            let handle = std::thread::spawn(move || edgeshield_tui::run(args));
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("TUI worker thread panicked"))?
         }
     }
 }
