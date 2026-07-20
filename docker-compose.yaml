@@ -1,0 +1,33 @@
+# Example EdgeShield Docker Compose deployment.
+#
+# Usage:
+#   1. Copy this file and edit edgeshield.toml to match your network.
+#   2. `docker compose up -d`
+#   3. Point your host's `edgeshield tui` at http://<host>:8080
+#
+# Packet capture needs the host network namespace + CAP_NET_RAW.
+# `network_mode: host` is the simplest way to get real traffic.
+# On a macvlan/ipvlan setup, drop `network_mode` and attach the
+# container to the macvlan network instead (see docs/deployment/docker.md).
+
+services:
+  edgeshield:
+    image: ghcr.io/edgeshield/edgeshield:latest
+    # Build locally instead of pulling from the registry:
+    # build: .
+    container_name: edgeshield
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    volumes:
+      # Mount your config (read-only) — or remove to use the image default.
+      - ./edgeshield.toml:/etc/edgeshield/config.toml:ro
+      # Persist the SQLite database across container recreations.
+      - edgeshield-data:/var/lib/edgeshield
+    restart: unless-stopped
+    # Optional: override the log level without editing the config file.
+    # environment:
+    #   RUST_LOG: edgeshield=debug
+
+volumes:
+  edgeshield-data:
