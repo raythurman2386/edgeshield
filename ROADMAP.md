@@ -54,7 +54,7 @@
 | PID file / single-instance guard | ✅ | `/run/edgeshield.pid`, detects running process via `libc::kill` |
 | Interface health monitoring (reconnect on flap) | ✅ | Done in Phase 1 — auto-reconnect with 2s backoff, 10-retry limit |
 | Clippy-clean codebase | ✅ | `cargo clippy --all-targets -- -D warnings` passes clean |
-| CI pipeline (cargo test, clippy, fmt) | ✅ | `.gitea/workflows/ci.yaml` — push + PR on main |
+| CI pipeline (cargo test, clippy, fmt) | ✅ | `.github/workflows/ci.yaml` — push + PR on main |
 | Man page (`edgeshield(8)`) | ✅ | `dist/edgeshield.8` — full man page with synopsis, options, endpoints |
 | Bash/Zsh completions | ✅ | `edgeshield completions bash` / `edgeshield completions zsh` |
 | Prometheus text metrics on /metrics | ✅ | New `/metrics/prometheus` endpoint in Prometheus text exposition format (devices_total, packets_total, bytes_total, uptime_seconds, alerts_total) |

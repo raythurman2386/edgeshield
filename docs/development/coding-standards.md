@@ -401,7 +401,7 @@ let data_offset = tcp.get_data_offset() as usize * 4;
 ### Prohibited dependencies
 
 - Dependencies with known vulnerabilities (blocked by `cargo audit`)
-- GPL-licensed dependencies (incompatible with MIT/Apache 2.0 licensing)
+- GPL-licensed dependencies (incompatible with Apache 2.0 licensing)
 - Dependencies with excessive transitive dependencies
 - Dependencies that pull in `unsafe` code without justification
 

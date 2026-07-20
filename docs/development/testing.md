@@ -347,7 +347,7 @@ cargo fuzz coverage decode_packet -- corpus/
 
 ### GitHub Actions
 
-All tests run on every pull request and push to `main`/`develop`. The abbreviated view below shows the current configuration; see `.github/workflows/ci.yaml` and `.gitea/workflows/ci.yaml` for the source of truth.
+All tests run on every pull request and push to `main`/`develop`. The abbreviated view below shows the current configuration; see `.github/workflows/ci.yaml` for the source of truth.
 
 ```yaml
 # .github/workflows/ci.yaml (abbreviated)

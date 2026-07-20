@@ -110,7 +110,7 @@ edgeshield/
 ├── dist/
 │   ├── edgeshield.service  # systemd unit file
 │   └── edgeshield.8        # Man page
-├── .gitea/workflows/
+├── .github/workflows/
 │   └── ci.yaml             # CI pipeline
 ├── crates/
 │   ├── common/             # Shared types, errors, timestamps
@@ -396,9 +396,6 @@ Wireshark is an interactive packet analyzer. Suricata and Zeek are full-featured
 
 ## License
 
-EdgeShield is dual-licensed:
+EdgeShield is licensed under the [Apache License, Version 2.0](LICENSE-APACHE) ([LICENSES.md](LICENSES.md)).
 
-- **Community Edition**: [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE)
-- **Commercial Edition**: Proprietary (see [LICENSES.md](LICENSES.md))
-
-The Community Edition is free for all use — personal, educational, and commercial.
+You may use, modify, and distribute EdgeShield for any purpose — personal, educational, or commercial — provided you include the license notice and state any significant changes.

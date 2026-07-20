@@ -1,19 +1,12 @@
 # Licensing
 
-EdgeShield uses a dual-licensing model to support both the open-source community and commercial users.
+EdgeShield is licensed under the **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE)).
 
-## Community Edition
+The Apache 2.0 license is a permissive, OSI-approved license that allows use, modification, and distribution for any purpose — personal, educational, or commercial — provided you include the license notice and state any significant changes. It also includes an explicit patent grant, which makes it well-suited for infrastructure and security tooling.
 
-The Community Edition of EdgeShield is licensed under your choice of:
+## What is covered
 
-- **MIT License** ([LICENSE-MIT](LICENSE-MIT))
-- **Apache License, Version 2.0** ([LICENSE-APACHE](LICENSE-APACHE))
-
-This is the same licensing model used by Rust, Tokio, and many other foundational Rust projects. You may use, modify, and distribute the Community Edition for any purpose — personal, educational, or commercial — without restriction, provided you include the appropriate license notice.
-
-### What is included
-
-All code in the following crates is available under the Community Edition license:
+All EdgeShield code is licensed under Apache 2.0, including:
 
 - `edgeshield-common`
 - `edgeshield-config`
@@ -22,39 +15,22 @@ All code in the following crates is available under the Community Edition licens
 - `edgeshield-protocol`
 - `edgeshield-storage`
 - `edgeshield-discovery`
+- `edgeshield-rules`
+- `edgeshield-notify`
 - `edgeshield-api`
 - `edgeshield-daemon`
 - `edgeshield-cli`
+- `edgeshield-tui`
+- `edgeshield-oui`
 
-## Commercial Edition
+## Permitted Use
 
-The Commercial Edition of EdgeShield is licensed under a proprietary license. It includes all Community Edition features plus additional capabilities designed for organizational use.
+You may:
 
-### Commercial features
-
-- **Multi-tenant support**: Isolated network segments for different teams or clients
-- **Advanced detection**: Signature-based and behavioral detection rules
-- **Enterprise authentication**: LDAP, SAML, OAuth2, SSO
-- **Role-based access control**: Granular permissions for users and roles
-- **SIEM integration**: Syslog, Common Event Format (CEF), and webhook output
-- **High availability**: Active-passive failover configuration
-- **SLA support**: Guaranteed response times and uptime commitments
-- **Custom branding**: White-label dashboard and reports
-
-### Commercial licensing
-
-Commercial licenses are available on a per-instance or per-organization basis. Contact **licensing@edgeshield.io** for pricing and terms.
-
-## Premium Features
-
-Some features may be available as premium add-ons for Community Edition users. These are individual features that can be purchased without a full Commercial Edition license.
-
-### Planned premium features
-
-- **Historical graphs**: 30-day traffic history with 1-minute resolution
-- **Alert webhooks**: Slack, Discord, PagerDuty, email integration
-- **Advanced reporting**: PDF/CSV export of network reports
-- **API rate limit increase**: Higher rate limits for API access
+- **Use** EdgeShield for any purpose, including commercial products and internal monitoring.
+- **Modify** the source code and distribute modifications under the terms of Apache 2.0.
+- **Redistribute** EdgeShield, in whole or in part, provided the license notice is included.
+- **Distribute** derivative works, provided you state any significant changes made to the original work (per Apache 2.0 §4(b)).
 
 ## Plugin Licensing
 
@@ -62,7 +38,7 @@ EdgeShield's future plugin system will support both open-source and commercial p
 
 ### Open-source plugins
 
-Plugins distributed under an OSI-approved open-source license (MIT, Apache 2.0, BSD, GPL) are welcome and encouraged. They are subject to the same contribution guidelines as core EdgeShield code.
+Plugins distributed under an OSI-approved open-source license (Apache 2.0, MIT, BSD, GPL) are welcome and encouraged. They are subject to the same contribution guidelines as core EdgeShield code.
 
 ### Commercial plugins
 
@@ -74,36 +50,35 @@ Plugins distributed under a proprietary license are permitted. The plugin API is
 
 ### Plugin API license
 
-The EdgeShield plugin API (traits, types, and interfaces in `edgeshield-common` and related crates) is licensed under MIT/Apache 2.0, regardless of the plugin's license. This ensures that plugin authors can depend on a stable, permissively-licensed interface.
+The EdgeShield plugin API (traits, types, and interfaces in `edgeshield-common` and related crates) is licensed under Apache 2.0, regardless of the plugin's license. This ensures that plugin authors can depend on a stable, permissively-licensed interface.
 
 ## License Compatibility
 
 | Component | License | Compatible With |
 |-----------|---------|-----------------|
-| Community Edition | MIT / Apache 2.0 | All uses |
-| Commercial Edition | Proprietary | Commercial license required |
+| EdgeShield core | Apache 2.0 | All uses |
 | Open-source plugins | OSI-approved | All uses |
 | Commercial plugins | Proprietary | Commercial license required |
-| Plugin API | MIT / Apache 2.0 | All uses |
+| Plugin API | Apache 2.0 | All uses |
 
 ## Frequently Asked Questions
 
-**Q: Can I use the Community Edition in my commercial product?**
+**Q: Can I use EdgeShield in my commercial product?**
 
-Yes. The MIT and Apache 2.0 licenses permit use in commercial products. You must include the license notice.
+Yes. The Apache 2.0 license permits use in commercial products. You must include the license notice.
 
-**Q: Can I redistribute EdgeShield Community Edition?**
+**Q: Can I redistribute EdgeShield?**
 
-Yes, under the terms of the MIT or Apache 2.0 license.
+Yes, under the terms of the Apache 2.0 license. You must include the license notice and state any significant changes you made to the original work.
 
-**Q: Do I need a commercial license if I'm using EdgeShield for internal monitoring at my company?**
+**Q: Do I need a separate license for internal use at my company?**
 
-No. The Community Edition is free for all use, including internal commercial use. The Commercial Edition is only needed for the additional features listed above.
+No. EdgeShield is free for all use, including internal commercial use.
 
 **Q: Can I sell a plugin for EdgeShield?**
 
-Yes. The plugin API is permissively licensed. You can sell plugins under any license you choose.
+Yes. The plugin API is permissively licensed under Apache 2.0. You can sell plugins under any license you choose.
 
-**Q: What happens if I stop paying for the Commercial Edition?**
+**Q: Why Apache 2.0 instead of MIT?**
 
-You may continue using the version you have licensed. You will not receive updates or support. You may revert to the Community Edition at any time.
+Apache 2.0 includes an explicit patent grant and a requirement to state significant changes, which provides stronger protection for both users and contributors. It is the license used by many foundational Rust ecosystem projects and is fully compatible with MIT-licensed dependencies.
