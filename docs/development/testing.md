@@ -4,10 +4,10 @@
 
 EdgeShield follows a multi-layered testing strategy:
 
-1. **Unit tests** verify individual functions and modules in isolation
-2. **Integration tests** verify subsystem interactions through public APIs
-3. **Benchmarks** measure performance and detect regressions
-4. **Fuzz tests** discover edge cases in packet parsing
+1. **Unit tests** verify individual functions and modules in isolation ✅
+2. **Integration tests** verify subsystem interactions through public APIs ✅
+3. **Benchmarks** measure performance and detect regressions 📋 Planned
+4. **Fuzz tests** discover edge cases in packet parsing 📋 Planned
 
 Tests are a first-class deliverable. Every pull request must include tests for new code and must not break existing tests.
 
@@ -183,6 +183,8 @@ When adding support for a new protocol, add a corresponding fixture builder:
 
 ## Benchmarks
 
+> **Status:** Planned. No `benches/` directories ship in the workspace yet. The targets below describe the intended benchmark surface once [Criterion](https://github.com/bheisler/criterion.rs) is wired up.
+
 ### Criterion benchmarks
 
 EdgeShield uses [Criterion](https://github.com/bheisler/criterion.rs) for benchmarks. Benchmarks are defined in `benches/` at the crate level.
@@ -277,6 +279,8 @@ sudo perf report
 
 ## Fuzz Testing
 
+> **Status:** Planned (Phase 3). No fuzz targets ship in the workspace yet. The design below describes the intended fuzzing approach once `cargo-fuzz` is integrated. Until fuzzing lands, the defensive-parsing property is held by the inline unit tests in `crates/packet/src/decode.rs` and `crates/protocol/src/*`, which exercise truncated and malformed inputs.
+
 ### Approach
 
 Fuzz testing is planned for Phase 3 (protocol parsing). The fuzzer generates random byte sequences and feeds them to the packet decoder. The goal is to find:
@@ -343,45 +347,51 @@ cargo fuzz coverage decode_packet -- corpus/
 
 ### GitHub Actions
 
-All tests run on every pull request and push to `main`/`develop`:
+All tests run on every pull request and push to `main`/`develop`. The abbreviated view below shows the current configuration; see `.github/workflows/ci.yaml` and `.gitea/workflows/ci.yaml` for the source of truth.
 
 ```yaml
-# .github/workflows/ci.yml (abbreviated)
+# .github/workflows/ci.yaml (abbreviated)
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo test --all-targets
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo fmt --check
-      - run: cargo audit
+      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev cmake
+      - run: cargo build --workspace
+      - run: cargo test --workspace
 
-  cross-compile:
+  audit:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target:
-          - aarch64-unknown-linux-gnu
-          - armv7-unknown-linux-gnueabihf
-          - x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo install cargo-audit
+      - run: cargo audit
 ```
+
+Cross-compilation for `aarch64-unknown-linux-gnu` and `armv7-unknown-linux-gnueabihf` is planned but not yet wired into CI.
 
 ### Test matrix
 
-| Check | Command | Required |
-|-------|---------|----------|
-| Unit tests | `cargo test --all-targets` | ✅ |
-| Clippy | `cargo clippy --all-targets -- -D warnings` | ✅ |
-| Formatting | `cargo fmt --check` | ✅ |
-| Audit | `cargo audit` | ✅ |
-| Build (x86_64) | `cargo build --release` | ✅ |
-| Build (aarch64) | `cross build --release --target aarch64-unknown-linux-gnu` | ✅ |
-| Build (armv7) | `cross build --release --target armv7-unknown-linux-gnueabihf` | ✅ |
-| Benchmarks | `cargo bench` (no regression check) | 📋 |
-| Fuzz tests | `cargo fuzz run decode_packet -- -runs=10000` | 📋 |
+| Check | Command | Required | Status |
+|-------|---------|----------|--------|
+| Unit tests | `cargo test --all-targets` | ✅ | Implemented |
+| Clippy | `cargo clippy --all-targets -- -D warnings` | ✅ | Implemented |
+| Formatting | `cargo fmt --check` | ✅ | Implemented |
+| Audit | `cargo audit` | ✅ | Implemented |
+| Build (x86_64) | `cargo build --release` | ✅ | Implemented |
+| Build (aarch64) | `cross build --release --target aarch64-unknown-linux-gnu` | ✅ | Planned |
+| Build (armv7) | `cross build --release --target armv7-unknown-linux-gnueabihf` | ✅ | Planned |
+| Benchmarks | `cargo bench` (no regression check) | 📋 | Planned |
+| Fuzz tests | `cargo fuzz run decode_packet -- -runs=10000` | 📋 | Planned |

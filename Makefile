@@ -1,4 +1,4 @@
-.PHONY: all build test clippy clean install uninstall
+.PHONY: all build test clippy audit clean install uninstall
 
 BINARY_NAME = edgeshield
 BINARY_PATH = target/release/$(BINARY_NAME)
@@ -16,6 +16,10 @@ test:
 
 clippy:
 	cargo clippy --all-targets -- -D warnings
+
+audit:
+	cargo install cargo-audit --locked --quiet 2>/dev/null || true
+	cargo audit
 
 clean:
 	cargo clean
