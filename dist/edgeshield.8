@@ -7,6 +7,12 @@ edgeshield \- lightweight network security monitoring daemon
 .B edgeshield run
 [\fB\-c\fR \fIconfig\fR]
 .B edgeshield default-config
+.B edgeshield setup
+[\fIoptions\fR]
+.B edgeshield tui
+[\fIoptions\fR]
+.B edgeshield completions
+\fIshell\fR
 .SH DESCRIPTION
 EdgeShield is a lightweight, self-hosted network behavior monitoring daemon
 designed for Raspberry Pi, homelabs, and small businesses. It captures packets
@@ -19,6 +25,42 @@ Start the EdgeShield daemon.
 .TP
 .B default-config
 Print the default TOML configuration to stdout.
+.TP
+.B setup
+First-run setup wizard. Generates a TOML config file, either
+interactively (prompting for each setting) or non-interactively (from
+flags). Can optionally generate an API key and wire up a notifier
+(MQTT, ntfy, webhook, or email). In non-interactive mode, required
+values must come from flags.
+.RS
+.B Options:
+.RS
+\fB\-\-config\fR=\fIPATH\fR    Path to write (default: /etc/edgeshield/config.toml)
+.br
+\fB\-\-non-interactive\fR  Run without prompting
+.br
+\fB\-\-force\fR            Overwrite an existing config
+.br
+\fB\-\-interface\fR=\fINAME\fR  Network interface to capture
+.br
+\fB\-\-api-port\fR=\fIPORT\fR   REST API port (default: 8080)
+.br
+\fB\-\-bind\fR=\fIADDR\fR       Bind address (default: 0.0.0.0)
+.br
+\fB\-\-database-path\fR=\fIPATH\fR  SQLite path (empty = in-memory)
+.br
+\fB\-\-generate-api-key\fR  Generate a random API key
+.br
+\fB\-\-enable-mqtt\fR / \fB\-\-enable-ntfy\fR / \fB\-\-enable-webhook\fR / \fB\-\-enable-email\fR
+Enable a notification channel (with corresponding \-\-mqtt-host, \-\-ntfy-url, etc.)
+.RE
+.TP
+.B tui
+Launch the read-only terminal UI dashboard. Connects to a running
+daemon over its REST API.
+.TP
+.B completions \fIshell\fR
+Print a shell completion script (bash or zsh).
 .SH OPTIONS
 .TP
 .BI \-c ", " \-\-config "=" path

@@ -18,6 +18,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Run the EdgeShield daemon.
     Run {
@@ -50,6 +51,89 @@ pub enum Command {
         /// Refresh interval in milliseconds.
         #[arg(long, default_value_t = 2000)]
         refresh_ms: u64,
+    },
+    /// First-run setup wizard — generate a config file interactively
+    /// or non-interactively (from flags / env vars).
+    ///
+    /// Without flags, prompts for each setting. With `--non-interactive`,
+    /// uses flag values and sensible defaults without prompting — this
+    /// is what the Docker entrypoint uses to generate a first-run config.
+    Setup {
+        /// Path to write the config file.
+        #[arg(short, long, default_value = "/etc/edgeshield/config.toml")]
+        config: String,
+        /// Run without prompting. Required values must come from flags.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Overwrite an existing config file.
+        #[arg(long)]
+        force: bool,
+        /// Network interface to capture (e.g. eth0).
+        #[arg(long)]
+        interface: Option<String>,
+        /// REST API port.
+        #[arg(long)]
+        api_port: Option<u16>,
+        /// Address to bind the REST API to (default 0.0.0.0).
+        #[arg(long)]
+        bind: Option<String>,
+        /// Log level (trace, debug, info, warn, error).
+        #[arg(long)]
+        log_level: Option<String>,
+        /// SQLite database path (empty = in-memory).
+        #[arg(long)]
+        database_path: Option<String>,
+        /// Generate a random API key and store its SHA-256 hash.
+        #[arg(long)]
+        generate_api_key: bool,
+        /// Enable MQTT notifications.
+        #[arg(long)]
+        enable_mqtt: bool,
+        /// MQTT broker host.
+        #[arg(long)]
+        mqtt_host: Option<String>,
+        /// MQTT broker port.
+        #[arg(long)]
+        mqtt_port: Option<u16>,
+        /// MQTT topic.
+        #[arg(long)]
+        mqtt_topic: Option<String>,
+        /// Enable ntfy notifications.
+        #[arg(long)]
+        enable_ntfy: bool,
+        /// ntfy server base URL.
+        #[arg(long)]
+        ntfy_url: Option<String>,
+        /// ntfy topic.
+        #[arg(long)]
+        ntfy_topic: Option<String>,
+        /// Enable webhook notifications.
+        #[arg(long)]
+        enable_webhook: bool,
+        /// Webhook URL.
+        #[arg(long)]
+        webhook_url: Option<String>,
+        /// Enable email notifications.
+        #[arg(long)]
+        enable_email: bool,
+        /// SMTP host.
+        #[arg(long)]
+        email_host: Option<String>,
+        /// SMTP port.
+        #[arg(long)]
+        email_port: Option<u16>,
+        /// SMTP username.
+        #[arg(long)]
+        email_username: Option<String>,
+        /// SMTP password.
+        #[arg(long)]
+        email_password: Option<String>,
+        /// From email address.
+        #[arg(long)]
+        email_from: Option<String>,
+        /// To email address.
+        #[arg(long)]
+        email_to: Option<String>,
     },
 }
 
@@ -143,7 +227,7 @@ _edgeshield() {{
     _init_completion || return
 
     if [[ $cword -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "run default-config completions tui" -- "$cur"))
+        COMPREPLY=($(compgen -W "run default-config completions tui setup" -- "$cur"))
         return
     fi
 
@@ -172,6 +256,22 @@ _edgeshield() {{
                     ;;
             esac
             ;;
+        setup)
+            case "$prev" in
+                -c|--config)
+                    COMPREPLY=($(compgen -f -- "$cur"))
+                    ;;
+                --interface)
+                    COMPREPLY=($(compgen -W "$(ls /sys/class/net 2>/dev/null)" -- "$cur"))
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "trace debug info warn error" -- "$cur"))
+                    ;;
+                *)
+                    COMPREPLY=($(compgen -W "-c --config --non-interactive --force --interface --api-port --bind --log-level --database-path --generate-api-key --enable-mqtt --mqtt-host --mqtt-port --mqtt-topic --enable-ntfy --ntfy-url --ntfy-topic --enable-webhook --webhook-url --enable-email --email-host --email-port --email-username --email-password --email-from --email-to" -- "$cur"))
+                    ;;
+            esac
+            ;;
     esac
 }} && complete -F _edgeshield edgeshield
 "#
@@ -190,6 +290,7 @@ _edgeshield() {{
         'default-config:Print the default configuration'
         'completions:Generate shell completion script'
         'tui:Launch the read-only observability dashboard'
+        'setup:First-run setup wizard'
     )
 
     _arguments \\
@@ -211,6 +312,34 @@ _edgeshield() {{
                         '--url[Base URL of the daemon REST API]:url' \
                         '--key[Bearer token for the daemon REST API]:key' \
                         '--refresh-ms[Refresh interval in milliseconds]:ms'
+                    ;;
+                setup)
+                    _arguments \
+                        '(-c --config)'{{-c,--config}}'[Path to write config file]:config file:_files' \
+                        '--non-interactive[Run without prompting]' \
+                        '--force[Overwrite existing config]' \
+                        '--interface[Network interface]:interface' \
+                        '--api-port[REST API port]:port' \
+                        '--bind[Bind address]:addr' \
+                        '--log-level[Log level]:level:(trace debug info warn error)' \
+                        '--database-path[SQLite path]:path:_files' \
+                        '--generate-api-key[Generate an API key]' \
+                        '--enable-mqtt[Enable MQTT]' \
+                        '--mqtt-host[MQTT host]:host' \
+                        '--mqtt-port[MQTT port]:port' \
+                        '--mqtt-topic[MQTT topic]:topic' \
+                        '--enable-ntfy[Enable ntfy]' \
+                        '--ntfy-url[ntfy URL]:url' \
+                        '--ntfy-topic[ntfy topic]:topic' \
+                        '--enable-webhook[Enable webhook]' \
+                        '--webhook-url[Webhook URL]:url' \
+                        '--enable-email[Enable email]' \
+                        '--email-host[SMTP host]:host' \
+                        '--email-port[SMTP port]:port' \
+                        '--email-username[SMTP username]:user' \
+                        '--email-password[SMTP password]:password' \
+                        '--email-from[From address]:addr' \
+                        '--email-to[To address]:addr'
                     ;;
             esac
             ;;
@@ -281,5 +410,157 @@ database_path = ""
                 .join()
                 .map_err(|_| anyhow::anyhow!("TUI worker thread panicked"))?
         }
+        Command::Setup {
+            config,
+            non_interactive,
+            force,
+            interface,
+            api_port,
+            bind,
+            log_level,
+            database_path,
+            generate_api_key,
+            enable_mqtt,
+            mqtt_host,
+            mqtt_port,
+            mqtt_topic,
+            enable_ntfy,
+            ntfy_url,
+            ntfy_topic,
+            enable_webhook,
+            webhook_url,
+            enable_email,
+            email_host,
+            email_port,
+            email_username,
+            email_password,
+            email_from,
+            email_to,
+        } => run_setup(
+            config,
+            non_interactive,
+            force,
+            interface,
+            api_port,
+            bind,
+            log_level,
+            database_path,
+            generate_api_key,
+            enable_mqtt,
+            mqtt_host,
+            mqtt_port,
+            mqtt_topic,
+            enable_ntfy,
+            ntfy_url,
+            ntfy_topic,
+            enable_webhook,
+            webhook_url,
+            enable_email,
+            email_host,
+            email_port,
+            email_username,
+            email_password,
+            email_from,
+            email_to,
+        ),
     }
+}
+
+/// Build `SetupInputs` from CLI flags, optionally prompt interactively,
+/// then run the wizard. Shared by the `setup` subcommand.
+#[allow(clippy::too_many_arguments)]
+fn run_setup(
+    config: String,
+    non_interactive: bool,
+    force: bool,
+    interface: Option<String>,
+    api_port: Option<u16>,
+    bind: Option<String>,
+    log_level: Option<String>,
+    database_path: Option<String>,
+    generate_api_key: bool,
+    enable_mqtt: bool,
+    mqtt_host: Option<String>,
+    mqtt_port: Option<u16>,
+    mqtt_topic: Option<String>,
+    enable_ntfy: bool,
+    ntfy_url: Option<String>,
+    ntfy_topic: Option<String>,
+    enable_webhook: bool,
+    webhook_url: Option<String>,
+    enable_email: bool,
+    email_host: Option<String>,
+    email_port: Option<u16>,
+    email_username: Option<String>,
+    email_password: Option<String>,
+    email_from: Option<String>,
+    email_to: Option<String>,
+) -> Result<(), anyhow::Error> {
+    use crate::setup::{EmailInputs, MqttInputs, NtfyInputs, SetupInputs, WebhookInputs};
+
+    let mut inputs = SetupInputs {
+        interface: interface.unwrap_or_default(),
+        api_port: api_port.unwrap_or(8080),
+        api_bind_address: bind.unwrap_or_else(|| "0.0.0.0".to_string()),
+        log_level: log_level.unwrap_or_else(|| "info".to_string()),
+        database_path: database_path.unwrap_or_default(),
+        generate_api_key,
+        mqtt: if enable_mqtt {
+            Some(MqttInputs {
+                host: mqtt_host.unwrap_or_default(),
+                port: mqtt_port.unwrap_or(1883),
+                topic: mqtt_topic.unwrap_or_else(|| "edgeshield/devices/new".to_string()),
+                username: None,
+                password: None,
+            })
+        } else {
+            None
+        },
+        ntfy: if enable_ntfy {
+            Some(NtfyInputs {
+                base_url: ntfy_url.unwrap_or_default(),
+                topic: ntfy_topic.unwrap_or_default(),
+                token: None,
+            })
+        } else {
+            None
+        },
+        webhook: if enable_webhook {
+            Some(WebhookInputs {
+                url: webhook_url.unwrap_or_default(),
+                token: None,
+            })
+        } else {
+            None
+        },
+        email: if enable_email {
+            Some(EmailInputs {
+                host: email_host.unwrap_or_default(),
+                port: email_port.unwrap_or(587),
+                username: email_username.unwrap_or_default(),
+                password: email_password.unwrap_or_default(),
+                from: email_from.unwrap_or_default(),
+                to: email_to.unwrap_or_default(),
+            })
+        } else {
+            None
+        },
+    };
+
+    if !non_interactive {
+        crate::setup::prompt_interactively(&mut inputs)?;
+    } else if inputs.interface.trim().is_empty() {
+        anyhow::bail!(
+            "non-interactive setup requires --interface (or EDGESHIELD_INTERFACE env var)"
+        );
+    }
+
+    let path = std::path::PathBuf::from(&config);
+    let api_key = crate::setup::run(inputs, &path, force)?;
+
+    println!("Config written to {}", path.display());
+    if let Some(key) = api_key {
+        crate::setup::print_api_key_warning(&key);
+    }
+    Ok(())
 }

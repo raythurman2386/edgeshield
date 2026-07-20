@@ -22,3 +22,8 @@ nix = { version = "0.29", default-features = false, features = ["user"] }
 edgeshield-config = { path = "../config" }
 edgeshield-daemon = { path = "../daemon" }
 edgeshield-tui = { path = "../tui", optional = true }
+# Setup wizard
+dialoguer.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
