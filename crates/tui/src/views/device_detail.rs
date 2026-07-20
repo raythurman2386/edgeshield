@@ -12,11 +12,28 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Sparkline};
+use ratatui::widgets::{Clear, Paragraph, Sparkline};
 
 use edgeshield_common::{Device, DeviceHistorySnapshot};
 
 use crate::theme;
+
+/// Format a byte count with a sensible unit (KB/MB/GB), keeping two
+/// significant figures. Values under 1024 render as plain bytes.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", n, UNITS[0])
+    } else {
+        format!("{:.2} {}", value, UNITS[unit])
+    }
+}
 
 /// State held while the device-detail view is open.
 #[derive(Debug, Default)]
@@ -50,7 +67,19 @@ impl DeviceDetailState {
 }
 
 /// Render the device-detail view into `area`.
+///
+/// This is an overlay: it draws on top of the previously-rendered
+/// view. Ratatui only paints cells the new widgets touch, so an
+/// overlay that doesn't clear its area first leaves the underlying
+/// frame visible in any cell the overlay's widgets don't write to
+/// (empty rows inside the bordered block, gaps between the info
+/// block and the sparkline, etc.). We render a `Clear` widget over
+/// the whole area first to blank it back to the default style.
 pub fn render(frame: &mut Frame, area: Rect, state: &DeviceDetailState) {
+    // Blank the underlying frame first — without this, the Devices
+    // table bleeds through the empty rows of the overlay.
+    frame.render_widget(Clear, area);
+
     let block = theme::active_block("Device Detail");
 
     let device = match state.device.as_ref() {
@@ -108,7 +137,8 @@ fn render_info(frame: &mut Frame, area: Rect, device: &Device, state: &DeviceDet
         Line::from(format!("Packets      : {}", device.packet_count)),
         Line::from(format!(
             "Bytes sent   : {}   received: {}",
-            device.bytes_sent, device.bytes_received
+            human_bytes(device.bytes_sent),
+            human_bytes(device.bytes_received),
         )),
         Line::from(format!("First seen   : {}", device.first_seen)),
         Line::from(format!("Last seen    : {}", device.last_seen)),

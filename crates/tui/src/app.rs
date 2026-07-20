@@ -232,11 +232,56 @@ impl App {
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: Rect, snap: &Snapshot) {
-        let reach = if snap.is_reachable() { "●" } else { "○" };
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+
+        // Left side: reachability dot (colored), current view, counts,
+        // and any transient flash message.
+        let reachable = snap.is_reachable();
+        let dot_color = if reachable {
+            crate::theme::Theme::ok()
+        } else {
+            crate::theme::Theme::error()
+        };
         let view = self.view.title();
         let counts = format!("{} dev · {} alert", snap.device_count(), snap.alert_count());
-        let flash = self.flash.as_deref().unwrap_or("");
-        let bar = format!(" {reach} {view:<8} {counts:<24} {flash}",);
+
+        let mut left_spans: Vec<Span> = vec![
+            Span::styled(" ●".to_string(), Style::default().fg(dot_color)),
+            Span::raw(format!(" {view:<8} ")),
+            Span::styled(counts, Style::default().add_modifier(Modifier::BOLD)),
+        ];
+        if let Some(flash) = self.flash.as_deref() {
+            left_spans.push(Span::raw("  "));
+            left_spans.push(Span::styled(
+                flash.to_string(),
+                Style::default().fg(crate::theme::Theme::error()),
+            ));
+        }
+
+        // Right side: a compact keybinding hint. The hint changes per
+        // view so the most relevant action is shown.
+        let hint = match self.view {
+            View::Devices => "↑↓ select · Enter detail · Tab switch · 1-4 views · q quit",
+            View::Alerts => "↑↓ select · a ack · Tab switch · 1-4 views · q quit",
+            View::Metrics => "Tab switch · 1-4 views · q quit",
+            View::Health => "Tab switch · 1-4 views · q quit",
+        };
+
+        // Compose: left spans (variable width) + right-aligned hint.
+        // We compute the remaining width and insert spaces to push the
+        // hint to the right edge of the status bar.
+        let total = area.width as usize;
+        let left_len: usize = left_spans.iter().map(|s| s.content.chars().count()).sum();
+        let hint_len: usize = hint.chars().count() + 1; // +1 for leading space
+        let padding = total.saturating_sub(left_len + hint_len);
+
+        let mut spans = left_spans;
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
+
+        let bar = Line::from(spans);
         frame.render_widget(Paragraph::new(bar).style(crate::theme::bar_style()), area);
     }
 

@@ -42,6 +42,10 @@ impl Theme {
     pub const fn error() -> Color {
         Color::Red
     }
+    /// Color for the "reachable" indicator in the status bar.
+    pub const fn ok() -> Color {
+        Color::Green
+    }
     /// Color for muted/secondary text.
     pub const fn muted() -> Color {
         Color::DarkGray

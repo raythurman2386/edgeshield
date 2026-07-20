@@ -78,13 +78,17 @@ pub fn render(frame: &mut Frame, area: Rect, snap: &Snapshot, state: &mut Device
                 .join(", ");
             let hostname = d.hostname.clone().unwrap_or_else(|| "—".into());
             let vendor = d.vendor.clone().unwrap_or_else(|| "—".into());
+            // Time-only format keeps the "Last seen" column narrow.
+            // Full ISO 8601 (e.g. "2026-07-20T00:51:29.764Z") eats the
+            // whole row on a narrow terminal.
+            let last_seen = d.last_seen.inner().format("%H:%M:%S").to_string();
             Row::new(vec![
                 Cell::from(d.mac.to_string()),
                 Cell::from(ips),
                 Cell::from(hostname),
                 Cell::from(vendor),
                 Cell::from(d.packet_count.to_string()),
-                Cell::from(d.last_seen.to_string()),
+                Cell::from(last_seen),
             ])
         })
         .collect();
@@ -95,7 +99,7 @@ pub fn render(frame: &mut Frame, area: Rect, snap: &Snapshot, state: &mut Device
         Constraint::Min(16),
         Constraint::Min(20),
         Constraint::Length(10),
-        Constraint::Length(28),
+        Constraint::Length(10),
     ];
 
     let table = Table::new(rows, widths)
