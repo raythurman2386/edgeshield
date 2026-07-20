@@ -7,21 +7,21 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 ```text
 ┌─────────────────────────────────────────────────────┐
 │                    EdgeShield                       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐    │
-│  │  Packet   │→│ Protocol │→│  Device Discovery │    │
-│  │  Capture  │  │  Classify│  │  & Fingerprinting│   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+│  │  Packet  │→ │ Protocol │→ │ Device Discovery │   │
+│  │ Capture  │  │  Classify│  │  & Fingerprinting│   │
 │  └──────────┘  └──────────┘  └────────┬─────────┘   │
 │                                       │             │
 │  ┌────────────────────────────────────▼──────────┐  │
-│  │              Rule Engine                        │  │
-│  │  (new_device, device_offline, protocol_change) │  │
-│  └────────────────────┬───────────────────────────┘  │
+│  │              Rule Engine                      │  │
+│  │  (new_device, device_offline, protocol_change)│  │
+│  └────────────────────┬──────────────────────────┘  │
 │                       │                             │
 │  ┌────────────────────▼──────────────────────────┐  │
-│  │  Notifier Fan-out → [ntfy, MQTT, webhook, email]│ │
+│  │ Notifier Fan-out →[ntfy, MQTT, webhook, email]│  │
 │  └───────────────────────────────────────────────┘  │
 │  ┌───────────────────────────────────────────────┐  │
-│  │  REST API + SQLite (devices, alerts, history)  │  │
+│  │  REST API + SQLite (devices, alerts, history) │  │
 │  └───────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────┘
 ```
@@ -41,7 +41,7 @@ EdgeShield is a passive network monitoring appliance written in Rust. It perform
 - **Performance** — write-back cache for SQLite (no per-packet SQL writes), single timestamp per packet, event emission only on state changes. Sustains 10k+ pps on Raspberry Pi 4 with persistence enabled.
 - **Structured JSON logging** — production-ready observability via `tracing`.
 - **Low memory footprint** — designed for Raspberry Pi Zero 2 W and similar constrained hardware.
-- **Privacy-first** — no telemetry, no external calls, no cloud dependency.
+- **Privacy-first** — no telemetry, no external calls, no cloud dependency. Observability is opt-in via sidecar collectors (Prometheus, Loki) — see [docs/observability.md](docs/observability.md) and the bundled [Grafana dashboard](docs/deployment/grafana.md).
 - **Self-contained binary** — single static binary with no runtime dependencies.
 
 ## Goals

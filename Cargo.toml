@@ -80,3 +80,7 @@ hex = "0.4"
 mac_address = { version = "1", features = ["serde"] }
 ipnetwork = "0.20"
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Setup wizard (interactive prompts + API key generation)
+dialoguer = { version = "0.11", default-features = false }
+rand = "0.8"

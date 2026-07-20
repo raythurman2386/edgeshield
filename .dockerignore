@@ -1,0 +1,34 @@
+# Build artifacts — rebuilt inside the image
+target/
+Cargo.lock
+
+# Git / CI
+.git/
+.github/
+
+# Docs and project metadata not needed at build time
+docs/
+dist/
+*.md
+LICENSE
+LICENSES.md
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local config (never bake secrets into an image)
+edgeshield.toml
+config.toml
+.env
+.env.local
+
+# Docker's own files
+Dockerfile
+.dockerignore
+docker-compose.yaml
+docker-compose.*.yaml
